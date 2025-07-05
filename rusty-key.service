@@ -1,0 +1,21 @@
+[Unit]
+Description=Rusty Key Secret Decryption
+DefaultDependencies=no
+Before=multi-user.target containerd.service docker.service podman.service
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=secrets
+Group=secrets
+ExecStart=/usr/local/bin/rusty-key decrypt-all \
+    --key /var/rusty-key/keys/master.key \
+    --source /var/rusty-key/secrets \
+    --target /run/rk-cache
+RemainAfterExit=true
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
