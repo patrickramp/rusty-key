@@ -58,7 +58,7 @@ rusty-key init --path /opt/secrets --force
 ```
 
 **Security Notes:**
-- Keys directory gets `0700` permissions (owner only)
+- Keys directory gets `0710` permissions (with group read)
 - Secrets directory gets `0750` permissions (owner + group)
 - Private key gets `0600` permissions
 - Public key gets `0640` permissions
@@ -117,64 +117,50 @@ rusty-key decrypt-all \
     --force
 
 # Verify tmpfs mount
-mount | grep /tmp/secrets
-# Should show: tmpfs on /tmp/secrets type tmpfs
+mount | grep /run/rk-cache
+# Should show: tmpfs on /run/rk-cache type tmpfs
 ```
-
-
 
 ## Container Integration
 
 ### Docker Compose Example
 
 ```yaml
-version: '3.8'
 services:
   app:
     image: my-app:latest
     volumes:
       - /opt/secrets:/secrets:ro
       - secrets-tmpfs:/tmp/secrets:rw
-    environment:
-      - SECRET_PATH=/tmp/secrets
-    command: |
-      sh -c "
-        rusty-key decrypt-all \
-          --key /secrets/keys/master.key \
-          --source /secrets/secrets \
-          --target /tmp/secrets &&
-        exec my-app
-      "
-    tmpfs:
-      - /tmp/secrets:rw,noexec,nosuid,size=10m
-
-volumes:
-  secrets-tmpfs:
-    driver: tmpfs
 ```
 
 ### Systemd Service Example
 
 ```ini
 [Unit]
-Description=Lightwight secret manager
-After=network.target
+Description=Rusty-Key Secret Decryption
+Before=multi-user.target containerd.service docker.service podman.service containers.target
+After=network-online.target
 
 [Service]
-Type=forking
-User=app
-Group=app
-Environment=SECRET_PATH=/tmp/secrets
-ExecStartPre=/usr/local/bin/rusty-key decrypt-all \
+Type=oneshot
+User=root
+Group=secrets
+RemainAfterExit=true
+
+# Create target directory with proper ownership & permissions before decrypting
+ExecStartPre=/bin/mkdir -p /run/rk-cache
+ExecStartPre=/bin/chown root:secrets /run/rk-cache
+ExecStartPre=/bin/chmod 710 /run/rk-cache
+
+# Decrypt secrets into memory-backed runtime dir
+ExecStart=/usr/local/bin/rusty-key decrypt-all \
     --key /var/rusty-key/keys/master.key \
     --source /var/rusty-key/secrets \
     --target /run/rk-cache
-ExecStart=/usr/local/bin/my-app
-ExecStopPost=/bin/rm -rf /run/rk-cache
-PrivateTmp=yes
-NoNewPrivileges=yes
-ProtectSystem=strict
-ReadWritePaths=/tmp
+
+StandardOutput=journal
+StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
@@ -196,7 +182,7 @@ sudo groupadd --system secrets
 # Secure the secrets directory
 sudo chown -R root:secrets /var/rusty-key
 sudo chmod -R g+rX /var/rusty-key
-sudo chmod 700 /var/rusty-key/keys
+sudo chmod 710 /var/rusty-key/keys
 
 # Add application users to secrets group
 sudo usermod -a -G secrets app-user
