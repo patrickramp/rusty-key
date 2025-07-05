@@ -1,0 +1,33 @@
+[package]
+name = "rusty-key"
+version = "0.1.0"
+edition = "2024"
+description = "Minimal secret management utility for container deployments"
+license = "MIT"
+
+[dependencies]
+age = "0.11.1"
+clap = { version = "4.5", features = ["derive"] }
+parking_lot = "0.12"
+once_cell = "1.21"
+zeroize = "1.8"
+
+[dev-dependencies]
+tempfile = "3.20"
+
+# 🚀 High-speed optimized build
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
+debug = false
+incremental = false
+overflow-checks = true
+debug-assertions = false
+
+# 🧊 musl-optimized build (for container images or static binaries)
+[profile.release-musl]
+inherits = "release"
+opt-level = "z"          # Size-optimized for containers
