@@ -94,7 +94,7 @@ fn init_secret_store(base_path: &Path, force: bool) -> Result<(), SecretError> {
     }
 
     // Set directory permissions
-    set_file_permissions(&keys_dir, 0o700)?;
+    set_file_permissions(&keys_dir, 0o710)?;
     set_file_permissions(&secrets_dir, 0o750)?;
 
     println!("Secret store initialized at {}", base_path.display());
@@ -180,7 +180,7 @@ fn decrypt_all_secrets(
 
     // Ensure target directory exists with proper permissions
     fs::create_dir_all(target)?;
-    set_file_permissions(target, 0o700)?;
+    set_file_permissions(target, 0o710)?;
 
     let mut decrypted_count = 0;
     let mut errors = Vec::new();
@@ -208,7 +208,7 @@ fn decrypt_all_secrets(
 
             match decrypt_file_to_path(&identity, &path, &target_path) {
                 Ok(()) => {
-                    set_file_permissions(&target_path, 0o600)?;
+                    set_file_permissions(&target_path, 0o640)?;
                     decrypted_count += 1;
                 }
                 Err(e) => {
@@ -546,7 +546,7 @@ mod tests {
 
             // Check file permissions
             let metadata = fs::metadata(&decrypted_file).unwrap();
-            assert_eq!(metadata.permissions().mode() & 0o777, 0o600);
+            assert_eq!(metadata.permissions().mode() & 0o777, 0o640);
         }
     }
 
