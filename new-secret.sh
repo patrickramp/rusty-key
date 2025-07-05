@@ -8,7 +8,7 @@ set -euo pipefail
 SECRETS_DIR="/var/rusty-key"
 PUBLIC_KEY="$SECRETS_DIR/keys/master.pub"
 SECRETS_STORE="$SECRETS_DIR/secrets"
-RUSTY_KEY_BIN="rusty-key"
+RUSTY_KEY_BIN="/usr/local/bin/rusty-key"
 
 # Colors for output
 RED='\033[0;31m'
@@ -276,3 +276,5 @@ main() {
 
 # Run main function
 main "$@"
+
+exit 0
