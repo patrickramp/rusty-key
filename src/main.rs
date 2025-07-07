@@ -1,3 +1,11 @@
+mod structs;
+mod errors;
+mod locks;
+
+use structs::{Cli, Commands, SecureBuffer};
+use errors::SecretError;
+use locks::FileLockGuard;
+
 use age::secrecy::{ExposeSecret, SecretString};
 use age::{Decryptor, Encryptor, Identity};
 use clap::Parser;
@@ -6,20 +14,10 @@ use std::io::{self, Read, Write};
 use std::path::Path;
 use std::process;
 
-mod cli_struct;
-mod errors;
-mod mem_struct;
-mod locks;
-
-use errors::SecretError;
-use locks::FileLockGuard;
-use mem_struct::SecureBuffer;
-
-
-use cli_struct::{Cli, Commands};
-
-/// Minimal secret management utility for container deployments
+/// Minimal encrypted secret management utility for automated deployments 
 /// Encrypts secrets at rest using age, provides clean migration to Vault
+
+/// Main function
 fn main() {
     let cli = Cli::parse();
 
@@ -28,10 +26,16 @@ fn main() {
         Commands::Encrypt {
             recipient,
             input,
-            output,
+            target,
             force,
-        } => encrypt_secret(&recipient, &input, &output, force),
+        } => encrypt_secret(&recipient, &input, &target, force),
         Commands::Decrypt { key, input } => decrypt_secret(&key, &input),
+        Commands::DecryptOne {
+            key,
+            source,
+            target,
+            force,
+        } => decrypt_secret_to_path(&key, &source, &target, force),
         Commands::DecryptAll {
             key,
             source,
@@ -70,8 +74,7 @@ fn init_secret_store(base_path: &Path, force: bool) -> Result<(), SecretError> {
     let recipient = identity.to_public();
 
     // Use SecretString for private key to ensure it's zeroed
-    let private_key_content =
-        SecretString::from(identity.to_string());
+    let private_key_content = SecretString::from(identity.to_string());
 
     {
         let _lock = FileLockGuard::new(&private_key_path)?;
@@ -150,9 +153,9 @@ fn encrypt_secret(
 }
 
 /// Decrypt a single secret to stdout with memory zeroing
-fn decrypt_secret(key_path: &Path, input: &Path) -> Result<(), SecretError> {
+fn decrypt_secret(key_path: &Path, input_path: &Path) -> Result<(), SecretError> {
     let identity = load_identity(key_path)?;
-    let encrypted = fs::read(input)?;
+    let encrypted = fs::read(input_path)?;
 
     let decryptor = Decryptor::new(&encrypted[..])?;
     let mut decrypted = Vec::new();
@@ -167,6 +170,33 @@ fn decrypt_secret(key_path: &Path, input: &Path) -> Result<(), SecretError> {
     io::stdout().flush()?;
 
     Ok(())
+}
+
+/// Decrypt single secret to target path with overwrite protection
+fn decrypt_secret_to_path(
+    key_path: &Path,
+    source: &Path,
+    target: &Path,
+    force: bool,
+) -> Result<(), SecretError> {
+    // Check for existing file unless force is specified
+    if !force && target.exists() {
+        return Err(SecretError::FileExists(format!(
+            "Output file {} already exists. Use --force to overwrite",
+            target.display()
+        )));
+    }
+    // Ensure target directory exists with proper permissions
+    let parent_dir = target
+        .parent()
+        .ok_or_else(|| SecretError::Parse("Unable to get target parent directory".to_string()))?;
+    if !parent_dir.exists() {
+        fs::create_dir_all(parent_dir).map_err(SecretError::Io)?;
+        set_file_permissions(parent_dir, 0o710)?;
+    }
+    // Load age identity and decrypt
+    let identity = load_identity(key_path)?;
+    decrypt_file_to_path(&identity, source, target)
 }
 
 /// Decrypt all .age files with concurrent processing and overwrite protection
@@ -358,17 +388,10 @@ fn read_stdin() -> Result<String, SecretError> {
 }
 
 /// Set file permissions (Unix-only)
-#[cfg(unix)]
 fn set_file_permissions(path: &Path, mode: u32) -> Result<(), SecretError> {
     use std::os::unix::fs::PermissionsExt;
     let permissions = std::fs::Permissions::from_mode(mode);
     fs::set_permissions(path, permissions)?;
-    Ok(())
-}
-
-/// No-op for non-Unix systems
-#[cfg(not(unix))]
-fn set_file_permissions(_path: &Path, _mode: u32) -> Result<(), SecretError> {
     Ok(())
 }
 
