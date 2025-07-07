@@ -6,7 +6,7 @@ use std::sync::Arc;
 use crate::errors;
 use errors::SecretError;
 
-// Global file lock manager to prevent concurrent writes
+/// Global file lock manager to prevent concurrent writes
 static FILE_LOCKS: once_cell::sync::Lazy<Arc<Mutex<HashMap<PathBuf, ()>>>> =
     once_cell::sync::Lazy::new(|| Arc::new(Mutex::new(HashMap::new())));
 
