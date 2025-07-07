@@ -1,8 +1,9 @@
+use age::secrecy::zeroize::Zeroize;
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
 #[derive(Parser)]
-#[command(name = "secret-manager", version = "1.1.0")]
+#[command(name = "secret-manager", version = "0.1.0")]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Commands,
@@ -29,7 +30,7 @@ pub enum Commands {
         input: String,
         /// Output file path
         #[arg(short, long)]
-        output: PathBuf,
+        target: PathBuf,
         /// Force overwrite existing file
         #[arg(long)]
         force: bool,
@@ -42,6 +43,21 @@ pub enum Commands {
         /// Encrypted input file
         #[arg(short, long)]
         input: PathBuf,
+    },
+    /// Decrypt single secret to path
+    DecryptOne {
+        /// Private key file path
+        #[arg(short, long)]
+        key: PathBuf,
+        /// Encrypted input file
+        #[arg(short, long)]
+        source: PathBuf,
+        /// Output file path
+        #[arg(short, long)]
+        target: PathBuf,
+        /// Force overwrite existing file
+        #[arg(long)]
+        force: bool,
     },
     /// Decrypt all secrets in directory to tmpfs
     DecryptAll {
@@ -60,3 +76,28 @@ pub enum Commands {
     },
 }
 
+// Memory-safe container for sensitive data that zeros on drop
+pub struct SecureBuffer {
+    data: Vec<u8>,
+}
+
+impl SecureBuffer {
+    pub fn new(data: Vec<u8>) -> Self {
+        Self { data }
+    }
+
+    pub fn as_slice(&self) -> &[u8] {
+        &self.data
+    }
+
+    pub fn len(&self) -> usize {
+        self.data.len()
+    }
+}
+
+impl Drop for SecureBuffer {
+    fn drop(&mut self) {
+        // Explicitly zero memory before deallocation
+        self.data.zeroize();
+    }
+}
