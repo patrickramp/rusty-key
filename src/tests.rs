@@ -26,7 +26,7 @@ fn test_init_secret_store_permissions() {
 
     // Check directory permissions
     let keys_metadata = fs::metadata(path.join("keys")).unwrap();
-    assert_eq!(keys_metadata.permissions().mode() & 0o777, 0o700);
+    assert_eq!(keys_metadata.permissions().mode() & 0o777, 0o710);
 
     let secrets_metadata = fs::metadata(path.join("secrets")).unwrap();
     assert_eq!(secrets_metadata.permissions().mode() & 0o777, 0o750);
@@ -130,6 +130,64 @@ fn test_encrypt_no_overwrite() {
     );
     assert!(result.is_err());
     assert!(matches!(result.unwrap_err(), SecretError::FileExists(_)));
+}
+
+#[test]
+fn test_encrypt_force_overwrite() {
+    let temp_dir = TempDir::new().unwrap();
+    let path = temp_dir.path();
+
+    init_secret_store(path, false).unwrap();
+
+    let pub_key = path.join("keys/master.pub");
+    let encrypted_file = path.join("test.age");
+
+    // First encrypt
+    encrypt_secret(
+        &pub_key.to_string_lossy(),
+        "test-secret",
+        &encrypted_file,
+        false,
+    )
+    .unwrap();
+
+    // Second encrypt with force should succeed
+    encrypt_secret(
+        &pub_key.to_string_lossy(),
+        "test-secret-2",
+        &encrypted_file,
+        true,
+    )
+    .unwrap();
+
+}
+
+#[test]
+fn test_decrypt_one_secret() {
+    let temp_dir = TempDir::new().unwrap();
+    let path = temp_dir.path();
+
+    init_secret_store(path, false).unwrap();
+
+    let pub_key = path.join("keys/master.pub");
+    let priv_key = path.join("keys/master.key");
+    let encrypted_file = path.join("test.age");
+    let target_file = path.join("test.txt");
+
+    // Encrypt
+    encrypt_secret(
+        &pub_key.to_string_lossy(),
+        "test-secret",
+        &encrypted_file,
+        false,
+    )
+    .unwrap();
+
+    // Decrypt
+    decrypt_file_to_path(&load_identity(&priv_key).unwrap(), &encrypted_file, &target_file).unwrap();
+
+    // Verify
+    assert_eq!(fs::read_to_string(&target_file).unwrap(), "test-secret");
 }
 
 #[test]
