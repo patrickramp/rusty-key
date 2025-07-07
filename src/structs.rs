@@ -22,7 +22,7 @@ pub enum Commands {
     },
     /// Encrypt a secret
     Encrypt {
-        /// Public key file or recipient string
+        /// Public key path or recipient (public key) string
         #[arg(short, long)]
         recipient: String,
         /// Input file (use - for stdin)
@@ -40,16 +40,16 @@ pub enum Commands {
         /// Private key file path
         #[arg(short, long)]
         key: PathBuf,
-        /// Encrypted input file
+        /// Encrypted source .age file
         #[arg(short, long)]
-        input: PathBuf,
+        source: PathBuf,
     },
     /// Decrypt single secret to path
     DecryptOne {
         /// Private key file path
         #[arg(short, long)]
         key: PathBuf,
-        /// Encrypted input file
+        /// Encrypted source .age file
         #[arg(short, long)]
         source: PathBuf,
         /// Output file path
@@ -59,7 +59,7 @@ pub enum Commands {
         #[arg(long)]
         force: bool,
     },
-    /// Decrypt all secrets in directory to tmpfs
+    /// Decrypt all secrets in source directory to target
     DecryptAll {
         /// Private key file path
         #[arg(short, long)]
