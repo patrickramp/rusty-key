@@ -13,6 +13,7 @@ readonly SECRETS_DIR="${SECRETS_DIR:-/var/rusty-key}"
 readonly PUBLIC_KEY="$SECRETS_DIR/keys/master.pub"
 readonly SECRETS_STORE="$SECRETS_DIR/secrets"
 readonly RUSTY_KEY_BIN="${RUSTY_KEY_BIN:-/usr/local/bin/rusty-key}"
+# shellcheck disable=SC2155
 readonly SCRIPT_NAME="$(basename "$0")"
 
 # Security limits
