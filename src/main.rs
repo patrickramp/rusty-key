@@ -12,16 +12,13 @@ use clap::Parser;
 use std::fs;
 use std::io::{self, Read, Write};
 use std::path::Path;
-use std::process;
 
 /// Minimal encrypted secret management utility for automated deployments 
 /// Encrypts secrets at rest using age, provides clean migration to Vault
 
 /// Main function
-fn main() {
-    let cli = Cli::parse();
-
-    let result = match cli.command {
+fn main() -> Result<(), SecretError> {
+    match Cli::parse().command {
         Commands::Init { path, force } => init_secret_store(&path, force),
         Commands::Encrypt {
             recipient,
@@ -29,7 +26,7 @@ fn main() {
             target,
             force,
         } => encrypt_secret(&recipient, &input, &target, force),
-        Commands::Decrypt { key, input } => decrypt_secret(&key, &input),
+        Commands::Decrypt { key, source } => decrypt_secret(&key, &source),
         Commands::DecryptOne {
             key,
             source,
@@ -42,11 +39,6 @@ fn main() {
             target,
             force,
         } => decrypt_all_secrets(&key, &source, &target, force),
-    };
-
-    if let Err(e) = result {
-        eprintln!("Error: {}", e);
-        process::exit(1);
     }
 }
 
@@ -143,7 +135,6 @@ fn encrypt_secret(
     fs::write(&temp_path, encrypted)?;
     set_file_permissions(&temp_path, 0o640)?;
     fs::rename(&temp_path, output)?;
-
     println!(
         "Encrypted {} bytes to {}",
         secure_content.len(),
@@ -153,9 +144,9 @@ fn encrypt_secret(
 }
 
 /// Decrypt a single secret to stdout with memory zeroing
-fn decrypt_secret(key_path: &Path, input_path: &Path) -> Result<(), SecretError> {
+fn decrypt_secret(key_path: &Path, source: &Path) -> Result<(), SecretError> {
     let identity = load_identity(key_path)?;
-    let encrypted = fs::read(input_path)?;
+    let encrypted = fs::read(source)?;
 
     let decryptor = Decryptor::new(&encrypted[..])?;
     let mut decrypted = Vec::new();
@@ -308,40 +299,31 @@ fn read_input_content(input: &str) -> Result<String, SecretError> {
 
 /// Parse recipient from string or file path
 fn parse_recipient(recipient: &str) -> Result<age::x25519::Recipient, SecretError> {
-    if recipient.starts_with('@') {
+    let content = if recipient.starts_with('@') {
         // @filename syntax for explicit file reading
         let filename = &recipient[1..];
-        if !Path::new(filename).exists() {
-            return Err(SecretError::InvalidPath(format!(
-                "Recipient file not found: {}",
-                filename
-            )));
-        }
-        let content = fs::read_to_string(filename)?;
-        content.trim().parse().map_err(|e| {
-            SecretError::Parse(format!("Invalid recipient in file {}: {}", filename, e))
-        })
+        fs::read_to_string(filename).map_err(|e| {
+            SecretError::InvalidPath(format!("Failed to read recipient file {}: {}", filename, e))
+        })?
     } else if Path::new(recipient).exists() {
         // Existing file path
-        let content = fs::read_to_string(recipient)?;
-        content
-            .trim()
-            .parse()
-            .map_err(|e| SecretError::Parse(format!("Invalid recipient in file: {}", e)))
+        fs::read_to_string(recipient).map_err(|e| {
+            SecretError::InvalidPath(format!("Failed to read recipient file {}: {}", recipient, e))
+        })?
     } else {
         // Parse as direct recipient string
-        recipient
-            .parse()
-            .map_err(|e| SecretError::Parse(format!("Invalid recipient string: {}", e)))
-    }
+        recipient.to_string()
+    };
+
+    content
+        .trim()
+        .parse()
+        .map_err(|e| SecretError::Parse(format!("Invalid recipient: {}", e)))
 }
 
 /// Load age identity from private key file with memory protection
 fn load_identity(key_path: &Path) -> Result<age::x25519::Identity, SecretError> {
-    let key_content = fs::read_to_string(key_path)?;
-    let secure_key = SecretString::from(key_content);
-
-    secure_key
+    SecretString::from(fs::read_to_string(key_path)?)
         .expose_secret()
         .trim()
         .parse()
@@ -374,20 +356,18 @@ fn decrypt_file_to_path(
     Ok(())
 }
 
-/// Read from stdin with proper error handling
+/// Read from stdin and remove trailing newline
 fn read_stdin() -> Result<String, SecretError> {
-    let mut content = String::new();
-    io::stdin().read_to_string(&mut content)?;
+    let mut input = String::new();
+    io::stdin().read_line(&mut input)?;
 
     // Remove trailing newline for consistency
-    if content.ends_with('\n') {
-        content.pop();
-    }
+    let output = input.trim_end_matches('\n').to_string();
 
-    Ok(content)
+    Ok(output)
 }
 
-/// Set file permissions (Unix-only)
+/// Set file permissions
 fn set_file_permissions(path: &Path, mode: u32) -> Result<(), SecretError> {
     use std::os::unix::fs::PermissionsExt;
     let permissions = std::fs::Permissions::from_mode(mode);
@@ -395,5 +375,6 @@ fn set_file_permissions(path: &Path, mode: u32) -> Result<(), SecretError> {
     Ok(())
 }
 
+/// Unittests
 #[cfg(test)]
 mod tests;
