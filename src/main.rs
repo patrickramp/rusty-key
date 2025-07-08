@@ -26,8 +26,9 @@ fn main() -> Result<(), SecretError> {
             target,
             force,
         } => encrypt_secret(&recipient, &input, &target, force),
-        Commands::Decrypt { key, source } => decrypt_secret(&key, &source),
-        Commands::DecryptOne {
+        Commands::ShowSecret { key, source } => show_secret(&key, &source),
+        Commands::ListSecrets { source } => list_secrets(&source),
+        Commands::Decrypt {
             key,
             source,
             target,
@@ -103,18 +104,25 @@ fn init_secret_store(base_path: &Path, force: bool) -> Result<(), SecretError> {
 fn encrypt_secret(
     recipient: &str,
     input: &str,
-    output: &Path,
+    target: &Path,
     force: bool,
 ) -> Result<(), SecretError> {
+    // Check target path for .age extension if not provided add it
+    let target = if !target.to_string_lossy().ends_with(".age") {
+        target.with_extension("age")
+    } else {
+        target.to_path_buf()
+    };
+
     // Check for existing file unless force is specified
-    if !force && output.exists() {
+    if !force && target.exists() {
         return Err(SecretError::FileExists(format!(
             "Output file {} already exists. Use --force to overwrite",
-            output.display()
+            target.display()
         )));
     }
 
-    let _lock = FileLockGuard::new(output)?;
+    let _lock = FileLockGuard::new(&target)?;
 
     let recipient = parse_recipient(recipient)?;
     let encryptor = Encryptor::with_recipients(std::iter::once(&recipient as &dyn age::Recipient))
@@ -131,20 +139,20 @@ fn encrypt_secret(
     writer.finish()?;
 
     // Atomic write to prevent partial files
-    let temp_path = output.with_extension("tmp");
+    let temp_path = target.with_extension("tmp");
     fs::write(&temp_path, encrypted)?;
     set_file_permissions(&temp_path, 0o640)?;
-    fs::rename(&temp_path, output)?;
+    fs::rename(&temp_path, &target)?;
     println!(
         "Encrypted {} bytes to {}",
         secure_content.len(),
-        output.display()
+        target.display()
     );
     Ok(())
 }
 
 /// Decrypt a single secret to stdout with memory zeroing
-fn decrypt_secret(key_path: &Path, source: &Path) -> Result<(), SecretError> {
+fn show_secret(key_path: &Path, source: &Path) -> Result<(), SecretError> {
     let identity = load_identity(key_path)?;
     let encrypted = fs::read(source)?;
 
@@ -160,6 +168,18 @@ fn decrypt_secret(key_path: &Path, source: &Path) -> Result<(), SecretError> {
     io::stdout().write_all(secure_decrypted.as_slice())?;
     io::stdout().flush()?;
 
+    Ok(())
+}
+
+/// List secrets in source directory
+fn list_secrets(source: &Path) -> Result<(), SecretError> {
+    let entries = fs::read_dir(source).map_err(SecretError::Io)?;
+    for entry in entries {
+        let path = entry.map_err(SecretError::Io)?.path();
+        if path.extension().and_then(|s| s.to_str()) == Some("age") {
+            println!("{}", path.display());
+        }
+    }
     Ok(())
 }
 
@@ -208,8 +228,7 @@ fn decrypt_all_secrets(
 
     // Process all .age files in source directory
     for entry in fs::read_dir(source)? {
-        let entry = entry?;
-        let path = entry.path();
+        let path = entry?.path();
 
         if path.extension().and_then(|s| s.to_str()) == Some("age") {
             let stem = path.file_stem().and_then(|s| s.to_str()).ok_or_else(|| {

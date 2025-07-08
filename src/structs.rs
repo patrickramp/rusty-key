@@ -23,9 +23,9 @@ pub enum Commands {
     /// Encrypt a secret
     Encrypt {
         /// Public key path or recipient (public key) string
-        #[arg(short, long)]
+        #[arg(short, long, default_value = "/var/rusty-key/keys/master.pub")]
         recipient: String,
-        /// Input file (use - for stdin)
+        /// Input file (use @<filepath> for file check or - for stdin)
         #[arg(short, long)]
         input: String,
         /// Output file path
@@ -36,18 +36,24 @@ pub enum Commands {
         force: bool,
     },
     /// Decrypt a secret to stdout
-    Decrypt {
+    ShowSecret {
         /// Private key file path
-        #[arg(short, long)]
+        #[arg(short, long, default_value = "/var/rusty-key/keys/master.key")]
         key: PathBuf,
         /// Encrypted source .age file
         #[arg(short, long)]
         source: PathBuf,
     },
+    /// List secrets in source directory
+    ListSecrets {
+        /// Directory containing .age files
+        #[arg(short, long, default_value = "/var/rusty-key/secrets")]
+        source: PathBuf,
+    },
     /// Decrypt single secret to path
-    DecryptOne {
+    Decrypt {
         /// Private key file path
-        #[arg(short, long)]
+        #[arg(short, long, default_value = "/var/rusty-key/keys/master.key")]
         key: PathBuf,
         /// Encrypted source .age file
         #[arg(short, long)]
@@ -62,13 +68,13 @@ pub enum Commands {
     /// Decrypt all secrets in source directory to target
     DecryptAll {
         /// Private key file path
-        #[arg(short, long)]
+        #[arg(short, long, default_value = "/var/rusty-key/keys/master.key")]
         key: PathBuf,
         /// Directory containing .age files
-        #[arg(short, long)]
+        #[arg(short, long, default_value = "/var/rusty-key/secrets")]
         source: PathBuf,
         /// Target directory (should be tmpfs)
-        #[arg(short, long)]
+        #[arg(short, long, default_value = "/run/rk-cache")]
         target: PathBuf,
         /// Force overwrite existing files
         #[arg(long)]
