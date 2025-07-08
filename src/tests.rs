@@ -163,6 +163,29 @@ fn test_encrypt_force_overwrite() {
 }
 
 #[test]
+fn test_list_secrets() {
+    let temp_dir = TempDir::new().unwrap();
+    let path = temp_dir.path();
+
+    init_secret_store(path, false).unwrap();
+
+    let pub_key = path.join("keys/master.pub");
+    let encrypted_file = path.join("test.age");
+
+    // First encrypt
+    encrypt_secret(
+        &pub_key.to_string_lossy(),
+        "test-secret",
+        &encrypted_file,
+        false,
+    )
+    .unwrap();
+
+    // List secrets
+    list_secrets(&path.join("secrets")).unwrap();
+}
+
+#[test]
 fn test_decrypt_one_secret() {
     let temp_dir = TempDir::new().unwrap();
     let path = temp_dir.path();
