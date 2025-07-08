@@ -13,7 +13,7 @@ pub struct Cli {
 pub enum Commands {
     /// Initialize secret store with new keypair
     Init {
-        /// Base directory for keys and secrets
+        /// Secure base directory for keys generation and default secret storage
         #[arg(short, long, default_value = "/var/rusty-key")]
         path: PathBuf,
         /// Force overwrite existing keys
@@ -22,21 +22,39 @@ pub enum Commands {
     },
     /// Encrypt a secret
     Encrypt {
-        /// Public key path or recipient (public key) string
+        /// Public key (path or string)
         #[arg(short, long, default_value = "/var/rusty-key/keys/master.pub")]
         recipient: String,
-        /// Input file (use @<filepath> for file check or - for stdin)
+        /// Input secret (use @<filepath> for file check, "<string>" for literal, or - for stdin)
         #[arg(short, long)]
         input: String,
-        /// Output file path
+        /// Target encrypted .age file
         #[arg(short, long)]
         target: PathBuf,
         /// Force overwrite existing file
         #[arg(long)]
         force: bool,
     },
-    /// Decrypt a secret to stdout
-    ShowSecret {
+    /// Quick secret creation
+    Quick {
+        /// Public key (path or string)
+        #[arg(short, long, default_value = "/var/rusty-key/keys/master.pub")]
+        recipient: String,
+        /// Input secret (use @<filepath> for file check, "<string>" for literal, or - for stdin)
+        #[arg(short, long)]
+        input: String,
+        /// Secret name 
+        #[arg(short, long, default_value = "random_id")]
+        name: String,
+        /// Target directory for new quick secrets 
+        #[arg(short, long, default_value = "/var/rusty-key/secrets")]
+        target: String,
+        /// Force overwrite existing file
+        #[arg(long)]
+        force: bool,
+    },
+    /// Decrypt single secret to stdout
+    Show {
         /// Private key file path
         #[arg(short, long, default_value = "/var/rusty-key/keys/master.key")]
         key: PathBuf,
@@ -45,7 +63,7 @@ pub enum Commands {
         source: PathBuf,
     },
     /// List secrets in source directory
-    ListSecrets {
+    List {
         /// Directory containing .age files
         #[arg(short, long, default_value = "/var/rusty-key/secrets")]
         source: PathBuf,
@@ -58,7 +76,7 @@ pub enum Commands {
         /// Encrypted source .age file
         #[arg(short, long)]
         source: PathBuf,
-        /// Output file path
+        /// Target file path (unencrypted secret data will be written here)
         #[arg(short, long)]
         target: PathBuf,
         /// Force overwrite existing file
@@ -73,7 +91,7 @@ pub enum Commands {
         /// Directory containing .age files
         #[arg(short, long, default_value = "/var/rusty-key/secrets")]
         source: PathBuf,
-        /// Target directory (should be tmpfs)
+        /// Target directory (unencrypted secret data will be written here)
         #[arg(short, long, default_value = "/run/rk-cache")]
         target: PathBuf,
         /// Force overwrite existing files
@@ -107,3 +125,5 @@ impl Drop for SecureBuffer {
         self.data.zeroize();
     }
 }
+
+

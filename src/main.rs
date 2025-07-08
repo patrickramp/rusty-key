@@ -12,6 +12,7 @@ use clap::Parser;
 use std::fs;
 use std::io::{self, Read, Write};
 use std::path::Path;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Minimal encrypted secret management utility for automated deployments 
 /// Encrypts secrets at rest using age, provides clean migration to Vault
@@ -26,8 +27,9 @@ fn main() -> Result<(), SecretError> {
             target,
             force,
         } => encrypt_secret(&recipient, &input, &target, force),
-        Commands::ShowSecret { key, source } => show_secret(&key, &source),
-        Commands::ListSecrets { source } => list_secrets(&source),
+        Commands::Quick { recipient, input, name, target, force } => quick_secret(&recipient, &input, &name, &target, force),
+        Commands::Show { key, source } => show_secret(&key, &source),
+        Commands::List { source } => list_secrets(&source),
         Commands::Decrypt {
             key,
             source,
@@ -151,6 +153,26 @@ fn encrypt_secret(
     Ok(())
 }
 
+/// Quick secret creation
+fn quick_secret(recipient: &str, secret: &str, name: &str, target: &str, force: bool) -> Result<(), SecretError> {
+    let target_dir = if name == "random_id" {
+        // Generate unique random filename
+        loop {
+            let random_id = generate_random_id();
+            let path = format!("{}/{}.age", target, random_id);
+            if !Path::new(&path).exists() {
+                break path;
+            }
+        }
+    } else {
+        // Use provided name, collision checking handled by encrypt_secret via force flag
+        format!("{}/{}.age", target, name)
+    };
+    
+    encrypt_secret(recipient, secret, Path::new(&target_dir), force)?;
+    Ok(())
+}
+
 /// Decrypt a single secret to stdout with memory zeroing
 fn show_secret(key_path: &Path, source: &Path) -> Result<(), SecretError> {
     let identity = load_identity(key_path)?;
@@ -200,7 +222,7 @@ fn decrypt_secret_to_path(
     // Ensure target directory exists with proper permissions
     let parent_dir = target
         .parent()
-        .ok_or_else(|| SecretError::Parse("Unable to get target parent directory".to_string()))?;
+        .ok_or_else(|| SecretError::Parse("Unable to determine target parent directory".to_string()))?;
     if !parent_dir.exists() {
         fs::create_dir_all(parent_dir).map_err(SecretError::Io)?;
         set_file_permissions(parent_dir, 0o710)?;
@@ -393,6 +415,21 @@ fn set_file_permissions(path: &Path, mode: u32) -> Result<(), SecretError> {
     fs::set_permissions(path, permissions)?;
     Ok(())
 }
+
+/// Generate a random 8-digit ID from Unix timestamp and random memory address
+fn generate_random_id() -> String {
+    let t = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+    
+    let a = (&t as *const u64 as u64) << 16;
+    
+    let mixed = (t ^ a).wrapping_mul(1103515245);
+    let id = (mixed % 100_000_000) as u32;
+    format!("{:08}", id)
+}
+
 
 /// Unittests
 #[cfg(test)]
