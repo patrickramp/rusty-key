@@ -2,7 +2,8 @@ mod cli;
 mod crypto;
 mod errors;
 mod filesystem;
-mod memory;
+//mod memory;
+
 
 use cli::{Cli, Commands};
 use crypto::CryptoManager;
@@ -23,7 +24,7 @@ fn main() -> Result<(), SecretError> {
             keys_dir,
             secrets_dir,
             force,
-        } => crypto.init_secret_store(&keys_dir, &secrets_dir, force, &fs),
+        } => crypto.init_store(&keys_dir, &secrets_dir, force, &fs),
         Commands::Encrypt {
             recipient,
             input,
@@ -36,17 +37,18 @@ fn main() -> Result<(), SecretError> {
             input,
             name,
             output,
+            cache,
             auto_decrypt,
             force,
-        } => crypto.quick_secret(&recipient, &key_path, &input, &name, &output, auto_decrypt, force, &fs),
+        } => crypto.quick_secret(&recipient, &key_path, &input, &name, &output, &cache, auto_decrypt, force, &fs),
         Commands::Show { key, source } => crypto.show_secret(&key, &source),
-        Commands::List { source } => fs.list_secrets(&source),
+        Commands::List { source } => crypto.list_secrets(&source, &fs),
         Commands::Decrypt {
             key,
-            source,
+            input,
             output,
             force,
-        } => crypto.decrypt_secret_to_path(&key, &source, &output, force, &fs),
+        } => crypto.decrypt_to_file(&key, &input, &output, force, &fs),
         Commands::DecryptAll {
             key,
             source,
