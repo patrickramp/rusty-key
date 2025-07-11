@@ -25,6 +25,10 @@ fn main() -> Result<(), SecretError> {
             secrets_dir,
             force,
         } => crypto.init_store(&keys_dir, &secrets_dir, force, &fs),
+        Commands::NewRecipient {
+            key_path,
+            public_path,
+        } => crypto.new_recipient(&key_path, &public_path, &fs),
         Commands::Encrypt {
             recipient,
             input,
@@ -42,6 +46,7 @@ fn main() -> Result<(), SecretError> {
             force,
         } => crypto.quick_secret(&recipient, &key_path, &input, &name, &output, &cache, auto_decrypt, force, &fs),
         Commands::Show { key, source } => crypto.show_secret(&key, &source),
+        Commands::Rotate { old_key, new_keys_dir, secrets_dir, force } => crypto.rotate_secrets_key(&old_key, &new_keys_dir, &secrets_dir, force, &fs),
         Commands::List { source } => crypto.list_secrets(&source, &fs),
         Commands::Decrypt {
             key,
