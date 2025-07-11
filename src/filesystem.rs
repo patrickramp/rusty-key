@@ -26,25 +26,25 @@ impl FileManager {
             self.verify_dir_permissions(path, mode)?;
             return Ok(());
         }
-
+        // Create directory
         fs::create_dir_all(path)?;
         self.set_permissions(path, mode)?;
         Ok(())
     }
 
     /// Write file atomically with exclusive lock
-    pub fn write_atomic(&self, path: &Path, content: &[u8], mode: u32) -> Result<(), SecretError> {
+    pub fn write_atomic(&self, path: &Path, content: &[u8], file_mode: u32, dir_mode: u32) -> Result<(), SecretError> {
         let _lock = FileLockGuard::acquire(path)?;
 
         // Ensure parent directory exists
         if let Some(parent) = path.parent() {
-            self.create_secure_dir(parent, 0o710)?;
+            self.create_secure_dir(parent, dir_mode)?;
         }
 
         // Write to temporary file first
         let temp_path = path.with_extension("tmp");
         fs::write(&temp_path, content)?;
-        self.set_permissions(&temp_path, mode)?;
+        self.set_permissions(&temp_path, file_mode)?;
 
         // Atomic rename
         fs::rename(&temp_path, path)?;
@@ -108,7 +108,7 @@ impl FileManager {
         Ok(buffer.trim_end_matches('\n').to_string())
     }
 
-    fn read_file_content(&self, path: &Path) -> Result<String, SecretError> {
+    pub fn read_file_content(&self, path: &Path) -> Result<String, SecretError> {
         if !path.exists() {
             return Err(SecretError::InvalidPath(format!(
                 "File not found: {}",
@@ -127,21 +127,21 @@ impl FileManager {
         Ok(())
     }
 
-    fn verify_dir_permissions(&self, path: &Path, expected_mode: u32) -> Result<(), SecretError> {
+    fn verify_dir_permissions(&self, path: &Path, mode: u32) -> Result<(), SecretError> {
         let metadata = fs::metadata(path).map_err(|_| {
             SecretError::InvalidPath(format!("Cannot read permissions for {}", path.display()))
         })?;
 
         let current_mode = metadata.permissions().mode() & 0o777;
-        if current_mode & !expected_mode != 0 {
+
+        if current_mode & !mode != 0 {
             eprintln!(
                 "[WARNING] Directory {} has permissive mode {:o} (expected {:o})",
                 path.display(),
                 current_mode,
-                expected_mode
+                mode
             );
         }
-
         Ok(())
     }
 }
