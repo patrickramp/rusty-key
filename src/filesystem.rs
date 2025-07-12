@@ -1,5 +1,6 @@
 // src/filesystem.rs
 use crate::errors::SecretError;
+
 use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::fs;
@@ -33,7 +34,13 @@ impl FileManager {
     }
 
     /// Write file atomically with exclusive lock
-    pub fn write_atomic(&self, path: &Path, content: &[u8], file_mode: u32, dir_mode: u32) -> Result<(), SecretError> {
+    pub fn write_atomic(
+        &self,
+        path: &Path,
+        content: &[u8],
+        file_mode: u32,
+        dir_mode: u32,
+    ) -> Result<(), SecretError> {
         let _lock = FileLockGuard::acquire(path)?;
 
         // Ensure parent directory exists
