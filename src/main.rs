@@ -2,13 +2,12 @@ mod cli;
 mod crypto;
 mod errors;
 mod filesystem;
-//mod memory;
-
+mod random;
 
 use cli::{Cli, Commands};
-use crypto::CryptoManager;
-use errors::SecretError;
+use crypto::{CryptoManager};
 use filesystem::FileManager;
+use errors::SecretError;
 
 use clap::Parser;
 
@@ -27,8 +26,10 @@ fn main() -> Result<(), SecretError> {
         } => crypto.init_store(&keys_dir, &secrets_dir, force, &fs),
         Commands::NewRecipient {
             key_path,
-            public_path,
-        } => crypto.new_recipient(&key_path, &public_path, &fs),
+            recipient_path,
+            force,
+        } => crypto.new_recipient(&key_path, &recipient_path, force, &fs),
+        Commands::NewIdentity { key_path, force } => crypto.new_identity(&key_path, force, &fs),
         Commands::Encrypt {
             recipient,
             input,
@@ -44,10 +45,26 @@ fn main() -> Result<(), SecretError> {
             cache,
             auto_decrypt,
             force,
-        } => crypto.quick_secret(&recipient, &key_path, &input, &name, &output, &cache, auto_decrypt, force, &fs),
+        } => crypto.quick_secret(
+            &recipient,
+            &key_path,
+            &input,
+            &name,
+            &output,
+            &cache,
+            auto_decrypt,
+            force,
+            &fs,
+        ),
         Commands::Show { key, source } => crypto.show_secret(&key, &source),
-        Commands::Rotate { old_key, new_keys_dir, secrets_dir, force } => crypto.rotate_secrets_key(&old_key, &new_keys_dir, &secrets_dir, force, &fs),
-        Commands::List { source } => crypto.list_secrets(&source, &fs),
+        Commands::Rotate {
+            old_key,
+            new_keys_dir,
+            secrets_dir,
+            verify,
+            force,
+        } => crypto.rotate_secrets_key(&old_key, &new_keys_dir, &secrets_dir, verify, force, &fs),
+        Commands::List { secrets_dir } => crypto.list_secrets(&secrets_dir, &fs),
         Commands::Decrypt {
             key,
             input,
