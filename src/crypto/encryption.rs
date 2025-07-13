@@ -1,8 +1,14 @@
+// src/crypto/encryption.rs
 use super::*;
+
+use age::Encryptor;
+use age::secrecy::{ExposeSecret, SecretString};
+use std::io::Write;
+use std::path::Path;
 
 impl CryptoManager {
     /// Encrypt content to file
-    pub fn encrypt_secret(
+    pub fn new_secret(
         &self,
         recipient: &str,
         input: &str,
@@ -29,42 +35,31 @@ impl CryptoManager {
         &self,
         recipient: &str,
         key_path: &Path,
-        input: &str,
         name: &str,
+        length: usize,
+        base: u64,
         output_dir: &Path,
         cache_dir: &Path,
         auto_decrypt: bool,
         force: bool,
         fs: &FileManager,
     ) -> Result<(), SecretError> {
-        let output_file = if name == "random_id" {
-            generate_unique_filename(output_dir)?
-        } else {
-            ensure_age_extension(&output_dir.join(name))
-        };
+        let output_file = ensure_age_extension(&output_dir.join(name));
+        let input = new_secret_string(length, base)?; 
 
-        self.encrypt_secret(recipient, input, &output_file, force, fs)?;
+        self.new_secret(recipient, input.expose_secret(), &output_file, force, fs)?;
 
         if auto_decrypt {
             let cache_file = cache_dir
                 .join(output_file.file_name().unwrap())
                 .with_extension("");
-            self.decrypt_to_file(key_path, &output_file, &cache_file, true, fs)?;
+            self.open_secret_to_file(key_path, &output_file, &cache_file, true, fs)?;
             println!("Auto-decrypted to {}", cache_file.display());
         }
 
         Ok(())
     }
-    
-    /// Decrypt secret to stdout
-    pub fn show_secret(&self, key_path: &Path, source: &Path) -> Result<(), SecretError> {
-        let identity = load_identity(key_path)?;
-        let content = self.decrypt_file(&identity, source)?;
 
-        io::stdout().write_all(content.expose_secret().as_bytes())?;
-        io::stdout().flush()?;
-        Ok(())
-    }
 
     // Private implementation methods
     pub fn encrypt_to_file(
@@ -75,12 +70,7 @@ impl CryptoManager {
         force: bool,
         fs: &FileManager,
     ) -> Result<(), SecretError> {
-        if !force && output.exists() {
-            return Err(SecretError::FileExists(format!(
-                "Output file {} already exists. Use --force to overwrite",
-                output.display()
-            )));
-        }
+        fs.overwrite_check(output, force)?;
 
         let encryptor =
             Encryptor::with_recipients(std::iter::once(recipient as &dyn age::Recipient))
@@ -94,8 +84,48 @@ impl CryptoManager {
         fs.write_atomic(output, &encrypted, 0o640, 0o750)?;
         Ok(())
     }
-
-    
 }
 
+// Sanitize filename
+pub fn sanitize_filename(filename: &str) -> String {
+    const MAX_LEN: usize = 255;
+    const RESERVED_NAMES: &[&str] = &[
+        "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
+        "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+    ];
 
+    let mut result = String::with_capacity(filename.len());
+
+    // Truncate filename if over MAX_LEN
+    if result.len() > MAX_LEN {
+        result.truncate(MAX_LEN);
+    }
+
+    for ch in filename.chars() {
+        match ch {
+            '\x00'..='\x1F' | '<' | '>' | ':' | '"' | '|' | '?' | '*' | '/' | '\\' => {
+                result.push('_')
+            }
+            _ => result.push(ch),
+        }
+    }
+
+    // Trim whitespace and trailing dots
+    result = result.trim_matches(char::is_whitespace).to_string();
+    result = result.trim_end_matches('.').to_string();
+
+    // Check reserved name
+    let name_part = result.split('.').next().unwrap_or("");
+    if RESERVED_NAMES
+        .iter()
+        .any(|&r| r.eq_ignore_ascii_case(name_part))
+    {
+        result.push('_');
+    }
+
+    if result.is_empty() {
+        result = "UNNAMED".to_string();
+    }
+
+    result
+}

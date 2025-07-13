@@ -11,19 +11,20 @@ use std::path::PathBuf;
 )]
 pub struct Cli {
     #[command(subcommand)]
-    pub command: Commands,
+    pub commands: Commands,
 }
 
 #[derive(Subcommand)]
 pub enum Commands {
+    // === INITIALIZATION ===
     /// Initialize new secret store and generate keypair
     Init {
         /// Directory for key storage
-        #[arg(short = 'k', long = "keys-dir", default_value = "/etc/rusty-key/keys")]
+        #[arg(short, long, default_value = "/etc/rusty-key/keys")]
         keys_dir: PathBuf,
 
         /// Directory for encrypted secrets storage
-        #[arg(short = 's', long = "secrets-dir", default_value = "/etc/rusty-key/secrets")]
+        #[arg(short, long, default_value = "/etc/rusty-key/secrets")]
         secrets_dir: PathBuf,
 
         /// Force overwrite existing keys and permissions
@@ -31,10 +32,11 @@ pub enum Commands {
         force: bool,
     },
 
+    // === KEY MANAGEMENT ===
     /// Generate new identity (private key)
-     NewIdentity {
-        /// Output path for new private key
-        #[arg(short = 'k', long = "key-path", default_value = "/etc/rusty-key/keys/new_identity.key")]
+    GenIdentity {
+        /// Path for new private key file
+        #[arg(short, long, default_value = "/etc/rusty-key/keys/identity.key")]
         key_path: PathBuf,
 
         /// Force overwrite existing private key
@@ -42,14 +44,14 @@ pub enum Commands {
         force: bool,
     },
 
-    /// Generate new recipient (public key) from existing identity
-    NewRecipient {
+    /// Generate recipient (public key) from existing identity
+    GenRecipient {
         /// Path to private key file
-        #[arg(short = 'k', long = "key-path", default_value = "/etc/rusty-key/keys/secrets.key")]
+        #[arg(short, long, default_value = "/etc/rusty-key/keys/identity.key")]
         key_path: PathBuf,
 
-        /// Output path for new recipient key
-        #[arg(short = 'r', long = "recipient-path", default_value = "/etc/rusty-key/keys/new_recipient.pub")]
+        /// Output path for recipient key
+        #[arg(short, long, default_value = "/etc/rusty-key/keys/recipient.pub")]
         recipient_path: PathBuf,
 
         /// Force overwrite existing public key
@@ -57,87 +59,22 @@ pub enum Commands {
         force: bool,
     },
 
-    /// Encrypt a secret to specified file
-    Encrypt {
-        /// Public key for encryption (@file, - for stdin, or literal key)
-        #[arg(short = 'r', long = "recipient", default_value = "/etc/rusty-key/keys/secrets.pub")]
-        recipient: String,
-
-        /// Input source (@file, - for stdin, or literal value)
-        #[arg(short = 'i', long = "input")]
-        input: String,
-
-        /// Output path for encrypted file
-        #[arg(short = 'o', long = "output")]
-        output: PathBuf,
-
-        /// Force overwrite existing output file
-        #[arg(long)]
-        force: bool,
-    },
-
-    /// Encrypt with auto-naming and optional auto-decrypt
-    Quick {
-        /// Public recipient key for encryption (@file, - for stdin, or literal key)
-        #[arg(short = 'r', long = "recipient", default_value = "/etc/rusty-key/keys/secrets.pub")]
-        recipient: String,
-
-        /// Private key file path for optional auto-decrypt
-        #[arg(short = 'k', long = "key-path", default_value = "/etc/rusty-key/keys/secrets.key")]
-        key_path: PathBuf,
-
-        /// Input source (@file, - for stdin, or literal value)
-        #[arg(short = 'i', long = "input")]
-        input: String,
-
-        /// Secret identifier name
-        #[arg(short = 'n', long = "name", default_value = "random_id")]
-        name: String,
-
-        /// Output directory for encrypted secrets
-        #[arg(short = 'o', long = "output", default_value = "/etc/rusty-key/secrets")]
-        output: PathBuf,
-
-        /// Cache directory for decrypted secrets
-        #[arg(short = 'c', long = "cache", default_value = "/run/rusty-key/cache")]
-        cache: PathBuf,
-
-        /// Automatically decrypt secret to cache directory after encryption
-        #[arg(short = 'a', long = "auto-decrypt")]
-        auto_decrypt: bool,
-
-        /// Force overwrite existing files
-        #[arg(long)]
-        force: bool,
-    },
-
-    /// Decrypt and print a single secret to stdout (USE WITH CAUTION)
-    Show {
-        /// Private key file path
-        #[arg(short = 'k', long = "key", default_value = "/etc/rusty-key/keys/secrets.key")]
-        key: PathBuf,
-
-        /// Encrypted .age source file
-        #[arg(short = 's', long = "source")]
-        source: PathBuf,
-    },
-
-    /// Rotate encryption keys and re-encrypt all secrets
-    Rotate {
-        /// Old private key file path
-        #[arg(short = 'k', long = "old-key", default_value = "/etc/rusty-key/keys/secrets.key")]
+    /// Generate new encryption keys and re-encrypt all secrets
+    RotateKeys {
+        /// Path to old private key file
+        #[arg(short, long, default_value = "/etc/rusty-key/keys/identity.key")]
         old_key: PathBuf,
 
         /// Directory for new key creation
-        #[arg(short = 'n', long = "new-keys", default_value = "/etc/rusty-key/new_keys")]
+        #[arg(short, long, default_value = "/etc/rusty-key/new_keys")]
         new_keys_dir: PathBuf,
         
-        /// Directory containing encrypted .age secrets
-        #[arg(short = 's', long = "secrets-dir", default_value = "/etc/rusty-key/secrets")]
+        /// Directory containing encrypted secrets
+        #[arg(short, long, default_value = "/etc/rusty-key/secrets")]
         secrets_dir: PathBuf,
 
         /// Verify new key roundtrip
-        #[arg(short = 'v', long = "verify")]
+        #[arg(short, long)]
         verify: bool,
 
         /// Force overwrite existing keys and directories
@@ -145,25 +82,38 @@ pub enum Commands {
         force: bool,
     },
 
-    /// List all encrypted .age secrets in directory
-    List {
-        /// Directory containing encrypted .age files
-        #[arg(short = 's', long = "secrets-dir", default_value = "/etc/rusty-key/secrets")]
-        secrets_dir: PathBuf,
-    },
+    // === SECRET OPERATIONS ===
+    /// Encrypt input to specified output path
+    Encrypt {
+        /// Recipient key for encryption (@file, - for stdin, or literal key)
+        #[arg(short, long, default_value = "/etc/rusty-key/keys/recipient.pub")]
+        recipient: String,
 
-    /// Decrypt single secret to output file
+        /// Input source (@file, - for stdin, or literal value)
+        #[arg(short, long)]
+        input: String,
+
+        /// Output path for encrypted file
+        #[arg(short, long)]
+        output: PathBuf,
+
+        /// Force overwrite existing output file
+        #[arg(long)]
+        force: bool,
+    },
+    
+    /// Decrypt single secret to output path
     Decrypt {
         /// Private key file path
-        #[arg(short = 'k', long = "key", default_value = "/etc/rusty-key/keys/secrets.key")]
-        key: PathBuf,
+        #[arg(short, long, default_value = "/etc/rusty-key/keys/identity.key")]
+        key_path: PathBuf,
 
         /// Input path for encrypted file
-        #[arg(short = 'i', long = "input")]
+        #[arg(short, long)]
         input: PathBuf,
 
         /// Output path for decrypted file
-        #[arg(short = 'o', long = "output")]
+        #[arg(short, long)]
         output: PathBuf,
 
         /// Force overwrite existing output file
@@ -171,21 +121,117 @@ pub enum Commands {
         force: bool,
     },
 
+    /// Create new named secret with secure random value
+    Generate {
+        /// Recipient key for encryption (@file, - for stdin, or literal key)
+        #[arg(short, long, default_value = "/etc/rusty-key/keys/recipient.pub")]
+        recipient: String,
+
+        /// Private key file path for optional auto-decrypt
+        #[arg(short, long, default_value = "/etc/rusty-key/keys/identity.key")]
+        key_path: PathBuf,
+
+        /// Secret name
+        #[arg(short, long)]
+        name: String,
+
+        /// Length of secret characters
+        #[arg(short, long, default_value = "32")]
+        length: usize,
+
+        /// Base encoding: 16(Hex), 32(RFC4648), 36(Alphanumeric), 58(BTC), 64(URL-Safe), 85(Z85), 94(ASCII)
+        #[arg(short, long, default_value = "58")]
+        base: u64,
+
+        /// Output directory for encrypted secrets
+        #[arg(short, long, default_value = "/etc/rusty-key/secrets")]
+        output: PathBuf,
+
+        /// Cache directory for optional auto decrypt
+        #[arg(short, long, default_value = "/run/rusty-key/cache")]
+        cache: PathBuf,
+
+        /// Automatically decrypt secret to cache directory after encryption
+        #[arg(short, long)]
+        auto_decrypt: bool,
+
+        /// Force overwrite existing files
+        #[arg(long)]
+        force: bool,
+    },
+
+    /// Decrypt and print secret to stdout (NOT SECURE)
+    Show {
+        /// Private key file path
+        #[arg(short, long, default_value = "/etc/rusty-key/keys/identity.key")]
+        key_path: PathBuf,
+
+        /// Encrypted source file
+        #[arg(short, long)]
+        source: PathBuf,
+    },
+
+    /// Rotate content of single encrypted secret
+    RotateSecret {
+        /// Private key file path
+        #[arg(short, long, default_value = "/etc/rusty-key/keys/identity.key")]
+        key_path: PathBuf,
+
+        /// Recipient key for encryption (@file, - for stdin, or literal key)
+        #[arg(short, long, default_value = "/etc/rusty-key/keys/recipient.pub")]
+        recipient: String,
+
+        /// Encrypted source file
+        #[arg(short, long)]
+        source: PathBuf,
+    },
+
+    // === BATCH OPERATIONS ===
+    /// List all encrypted secrets in directory
+    List {
+        /// Directory containing encrypted files
+        #[arg(short, long, default_value = "/etc/rusty-key/secrets")]
+        secrets_dir: PathBuf,
+    },
+
     /// Decrypt all secrets from source directory to output directory
     DecryptAll {
         /// Private key file path
-        #[arg(short = 'k', long = "key", default_value = "/etc/rusty-key/keys/secrets.key")]
-        key: PathBuf,
+        #[arg(short, long, default_value = "/etc/rusty-key/keys/identity.key")]
+        key_path: PathBuf,
 
-        /// Source directory containing .age encrypted files
-        #[arg(short = 's', long = "source", default_value = "/etc/rusty-key/secrets")]
+        /// Source directory containing encrypted files
+        #[arg(short, long, default_value = "/etc/rusty-key/secrets")]
         source: PathBuf,
 
         /// Output directory for decrypted files
-        #[arg(short = 'o', long = "output", default_value = "/run/rusty-key/cache")]
+        #[arg(short, long, default_value = "/run/rusty-key/cache")]
         output: PathBuf,
 
         /// Force overwrite existing output files
+        #[arg(long)]
+        force: bool,
+    },
+
+    /// Rotate content of all secrets in directory
+    RotateAll {
+        /// Private key file path
+        #[arg(short, long, default_value = "/etc/rusty-key/keys/identity.key")]
+        key_path: PathBuf,
+
+        /// Recipient key for encryption (@file, - for stdin, or literal key)
+        #[arg(short, long, default_value = "/etc/rusty-key/keys/recipient.pub")]
+        recipient: String,
+
+        /// Directory containing encrypted secrets
+        #[arg(short, long, default_value = "/etc/rusty-key/secrets")]
+        secrets_dir: PathBuf,
+
+        /// Verify new key roundtrip
+        #[arg(short, long)]
+        verify: bool,
+
+        /// Force overwrite existing files
         #[arg(long)]
         force: bool,
     },

@@ -15,32 +15,52 @@ use clap::Parser;
 /// Encrypts secrets at rest using age, provides clean migration to Vault
 fn main() -> Result<(), SecretError> {
     let cli = Cli::parse();
-    let crypto = CryptoManager::new();
-    let fs = FileManager::new();
+    let crypto = CryptoManager;
+    let fs = FileManager;
 
-    match cli.command {
+    match cli.commands {
         Commands::Init {
             keys_dir,
             secrets_dir,
             force,
         } => crypto.init_store(&keys_dir, &secrets_dir, force, &fs),
-        Commands::NewRecipient {
+
+        Commands::GenIdentity { key_path, force } => crypto.new_identity(&key_path, force, &fs),
+
+        Commands::GenRecipient {
             key_path,
             recipient_path,
             force,
         } => crypto.new_recipient(&key_path, &recipient_path, force, &fs),
-        Commands::NewIdentity { key_path, force } => crypto.new_identity(&key_path, force, &fs),
+
+        Commands::RotateKeys {
+            old_key,
+            new_keys_dir,
+            secrets_dir,
+            verify,
+            force,
+        } => crypto.rotate_encryption_keys(&old_key, &new_keys_dir, &secrets_dir, verify, force, &fs),
+
         Commands::Encrypt {
             recipient,
             input,
             output,
             force,
-        } => crypto.encrypt_secret(&recipient, &input, &output, force, &fs),
-        Commands::Quick {
-            recipient,
+        } => crypto.new_secret(&recipient, &input, &output, force, &fs),
+
+        Commands::Decrypt {
             key_path,
             input,
+            output,
+            force,
+        } => crypto.open_secret_to_file(&key_path, &input, &output, force, &fs),
+
+        Commands::Generate {
+            recipient,
+            key_path,
             name,
+            length,
+            base,
             output,
             cache,
             auto_decrypt,
@@ -48,34 +68,41 @@ fn main() -> Result<(), SecretError> {
         } => crypto.quick_secret(
             &recipient,
             &key_path,
-            &input,
             &name,
+            length,
+            base,
             &output,
             &cache,
             auto_decrypt,
             force,
             &fs,
         ),
-        Commands::Show { key, source } => crypto.show_secret(&key, &source),
-        Commands::Rotate {
-            old_key,
-            new_keys_dir,
-            secrets_dir,
+
+        Commands::Show { key_path, source } => crypto.show_secret(&key_path, &source, &fs),
+
+        Commands::RotateSecret {
+            key_path,
+            secret_path,
+            recipient,
+            base: u64,
             verify,
-            force,
-        } => crypto.rotate_secrets_key(&old_key, &new_keys_dir, &secrets_dir, verify, force, &fs),
+        } => crypto.rotate_secret(&key_path, secret_path, recipient, base, verify, &fs),
+
         Commands::List { secrets_dir } => crypto.list_secrets(&secrets_dir, &fs),
-        Commands::Decrypt {
-            key,
-            input,
-            output,
-            force,
-        } => crypto.decrypt_to_file(&key, &input, &output, force, &fs),
+
         Commands::DecryptAll {
-            key,
+            key_path,
             source,
             output,
             force,
-        } => crypto.decrypt_all_secrets(&key, &source, &output, force, &fs),
+        } => crypto.open_all_secrets(&key_path, &source, &output, force, &fs),
+
+        Commands::RotateAll {
+            key_path,
+            recipient,
+            secrets_dir,
+            verify,
+            force,
+        } => crypto.rotate_secrets(&key_path, &recipient, &secrets_dir, verify, force, &fs),
     }
 }

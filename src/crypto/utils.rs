@@ -1,10 +1,12 @@
+use crate::random::new_secret_string;
+
 use super::*;
 
-impl CryptoManager {
-    pub fn new() -> Self {
-        Self
-    }
+use age::secrecy::ExposeSecret;
+use std::fs;
+use std::path::{Path, PathBuf};
 
+impl CryptoManager {
     /// Initialize secret store with new age keypair
     pub fn init_store(
         &self,
@@ -16,11 +18,8 @@ impl CryptoManager {
         let (public_key_path, private_key_path) = get_key_paths(keys_dir);
 
         // Check existing keys unless force is enabled
-        if !force && (private_key_path.exists() || public_key_path.exists()) {
-            return Err(SecretError::FileExists(
-                "Keys already exist. Use --force to overwrite".to_string(),
-            ));
-        }
+        fs.overwrite_check(&public_key_path, force)?;
+        fs.overwrite_check(&private_key_path, force)?;
 
         // Create secure directories
         fs.create_secure_dir(keys_dir, 0o710)?;
@@ -53,16 +52,17 @@ impl CryptoManager {
         force: bool,
         fs: &FileManager,
     ) -> Result<(), SecretError> {
-        if !force && recipient_path.exists() {
-            return Err(SecretError::FileExists(
-                "Public key already exists. Use --force to overwrite".to_string(),
-            ));
-        }
-        let identity = age::x25519::Identity::from_str(&fs.read_file_content(key_path)?)
-            .map_err(|_| SecretError::Parse("Invalid public key".to_string()))?;
-        let new_recipient = identity.to_public().to_string();
+        fs.overwrite_check(recipient_path, force)?;
 
-        fs.write_atomic(recipient_path, new_recipient.as_bytes(), 0o640, 0o710)?;
+        let identity = fs.parse_identity_file(key_path)?;
+        let new_recipient = identity.to_public();
+
+        fs.write_atomic(
+            recipient_path,
+            new_recipient.to_string().as_bytes(),
+            0o640,
+            0o710,
+        )?;
 
         println!("New public recipient key: {}", recipient_path.display());
         Ok(())
@@ -75,11 +75,8 @@ impl CryptoManager {
         force: bool,
         fs: &FileManager,
     ) -> Result<(), SecretError> {
-        if !force && key_path.exists() {
-            return Err(SecretError::FileExists(
-                "Private key already exists. Use --force to overwrite".to_string(),
-            ));
-        }
+        fs.overwrite_check(key_path, force)?;
+
         let identity = age::x25519::Identity::generate();
         fs.write_atomic(
             key_path,
@@ -91,8 +88,88 @@ impl CryptoManager {
         Ok(())
     }
 
+    /// Rotate secret contents
+
+    pub fn rotate_secret(
+        &self,
+        key_path: &Path,
+        recipient: &str,
+        base: u64,
+        secret_path: &Path,
+        verify: bool,
+        fs: &FileManager,
+    ) -> Result<(), SecretError> {
+        let identity = fs.parse_identity_file(key_path)?;
+        let recipient = fs.parse_recipient(recipient)?;
+
+        let old_secret = self.decrypt_file(&identity, secret_path)?;
+        let content_length = old_secret.expose_secret().len();
+
+        let new_secret = new_secret_string(content_length, base)?;
+
+        self.encrypt_to_file(secret_path, &recipient, &new_secret, true, fs)?;
+
+        if verify {
+            match self.verify_secret(&identity, secret_path) {
+                Ok(()) => println!("Roundtrip verification successful"),
+                Err(e) => eprintln!("Verification failed: {}", e),
+            }
+        }
+        match self.decrypt_file(&identity, secret_path)?.expose_secret() != old_secret.expose_secret() {
+            true => {}
+            false => {
+                return Err(SecretError::Parse(
+                    "Secret unchanged. Failed to rotate secret".to_string(),
+                ));
+            }
+        }
+
+        println!(
+            "Secret {} rotated ({} characters long)",
+            secret_path.display(),
+            content_length,
+        );
+
+        Ok(())
+    }
+
+    /// Rotate all secrets in directory
+    pub fn rotate_all_secrets(
+        &self,
+        key_path: &Path,
+        recipient: &str,
+        secrets_dir: &Path,
+        base: u64,
+        verify: bool,
+        fs: &FileManager,
+    ) -> Result<(), SecretError> {
+        let mut errors = Vec::new();
+
+        for secret in fs.list_age_files(secrets_dir)? {
+            match self.rotate_secret(
+                key_path,
+                recipient,
+                base,
+                &secret,
+                verify,
+                fs,
+            ) {
+                Ok(()) => {}
+                Err(e) => errors.push(e),
+            }
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(SecretError::Multiple(errors))
+        }
+    }
+    
+
+
     /// Rotate age keypair
-    pub fn rotate_secrets_key(
+    pub fn rotate_encryption_keys(
         &self,
         old_key_path: &Path,
         new_keys_dir: &Path,
@@ -125,36 +202,67 @@ impl CryptoManager {
             0o750,
         )?;
 
-        let old_identity = load_identity(&old_key_path)?;
+        let old_identity = fs.parse_identity_file(&old_key_path)?;
 
         println!("New Public key: {}", public_key_path.display());
         println!("New Private key: {}", private_key_path.display());
-        
-        self.roate_keys(&old_identity, &new_recipient, secrets_dir, fs)?;
 
+        self.roate_keys(
+            &old_identity,
+            &new_recipient,
+            &new_identity,
+            secrets_dir,
+            verify,
+            fs,
+        )?;
 
-        if verify {
-            match self.verify_keys(&private_key_path, &secrets_dir, fs) {
-                Ok(()) => {print!("and verified")}
+        println!(" at {} successfully rotated", secrets_dir.display());
+        Ok(())
+    }
+
+    // Utility methods
+    fn roate_keys(
+        &self,
+        old_identity: &age::x25519::Identity,
+        new_recipient: &age::x25519::Recipient,
+        new_identity: &age::x25519::Identity,
+        secrets_dir: &Path,
+        verify: bool,
+        fs: &FileManager,
+    ) -> Result<(), SecretError> {
+        let mut n = 0;
+        for file in fs.list_age_files(secrets_dir)? {
+            match self.decrypt_file(&old_identity, &file) {
+                Ok(secret) => {
+                    self.encrypt_to_file(&file, &new_recipient, &secret, true, fs)?;
+                    println!("Secret {} successfully rotated", file.display());
+
+                    if verify {
+                        match self.verify_secret(&new_identity, &file) {
+                            Ok(()) => println!("Roundtrip verification successful"),
+                            Err(e) => eprintln!("Verification failed: {}", e),
+                        }
+                    }
+                    n += 1;
+                }
                 Err(e) => {
-                return Err(SecretError::Parse(format!(
-                "[Warning] {} secrets failed to verify",
-                e
-            )));
-            }
+                    eprintln!("Failed to rotate secret {}: {}", file.display(), e);
+                }
             }
         }
 
-        println!(
-            " at {} successfully rotated",
-            secrets_dir.display()
-        );
+        if n == 0 {
+            return Err(SecretError::Parse("No secrets rotated".to_string()));
+        } else {
+            print!("{} secrets have been rotated...  ", n);
+        }
+
         Ok(())
     }
 
     /// List secret files with their last modified time
     pub fn list_secrets(&self, directory: &Path, fs: &FileManager) -> Result<(), SecretError> {
-        let secret_files = fs.list_encrypted_files(directory)?;
+        let secret_files = fs.list_age_files(directory)?;
 
         for secret_file in secret_files {
             let file_metadata = fs::metadata(&secret_file)?;
@@ -176,99 +284,20 @@ impl CryptoManager {
         Ok(())
     }
 
-    // Utility methods
-    fn roate_keys(
+    fn verify_secret(
         &self,
-        old_identity: &age::x25519::Identity,
-        new_recipient: &age::x25519::Recipient,
-        secrets_path: &Path,
-        fs: &FileManager,
+        identity: &age::x25519::Identity,
+        secret: &Path,
     ) -> Result<(), SecretError> {
-        let mut n = 0;
-        for file in fs.list_encrypted_files(secrets_path)? {
-            match self.decrypt_file(&old_identity, &file) {
-                Ok(secret) => {
-                    self.encrypt_to_file(&file, &new_recipient, &secret, true, fs)?;
-                    println!("Secret {} successfully rotated", file.display());
-                    n += 1;
-                }
-                Err(e) => {
-                    eprintln!("Failed to rotate secret {}: {}", file.display(), e);
-                }
-            }
+        match self.decrypt_file(&identity, &secret) {
+            Ok(_) => Ok(()),
+            Err(e) => Err(SecretError::Parse(format!(
+                "Failed to verify secret {}: {}",
+                secret.display(),
+                e
+            ))),
         }
-
-        if n == 0 {
-            return Err(SecretError::Parse("No secrets rotated".to_string()));
-        } else {
-            print!("{} secrets have been rotated...  ", n);
-        }
-
-        Ok(())
     }
-
-    fn verify_keys(
-        &self,
-        key_path: &Path,
-        secrets_dir: &Path,
-        fs: &FileManager,
-    ) -> Result<(), SecretError> {
-        if !key_path.exists() {
-            return Err(SecretError::InvalidPath(format!(
-                "Key path does not exist: {}",
-                key_path.display()
-            )));
-        }
-
-        if !secrets_dir.exists() {
-            return Err(SecretError::InvalidPath(format!(
-                "Secrets directory does not exist: {}",
-                secrets_dir.display()
-            )));
-        }
-
-        let identity = load_identity(key_path)?;
-        let secrets = fs.list_encrypted_files(secrets_dir)?;
-        if secrets.is_empty() {
-            eprintln!(
-                "Warning: No encrypted files found in {}",
-                secrets_dir.display()
-            );
-            return Ok(());
-        }
-
-        let mut errors = 0;
-        for secret in secrets {
-            match self.decrypt_file(&identity, &secret) {
-                Ok(_) => {
-                    continue;
-                }
-                Err(e) => {
-                    eprintln!("Failed to decrypt secret {}: {}", secret.display(), e);
-                    errors += 1;
-                    continue;
-                }
-            }
-        }
-
-        if errors > 0 {
-            return Err(SecretError::Parse(format!(
-                "[Warning] {} secrets failed to verify",
-                errors
-            )));
-        }
-
-        Ok(())
-    }
-}
-
-pub fn load_identity(key_path: &Path) -> Result<age::x25519::Identity, SecretError> {
-    let key_content = fs::read_to_string(key_path)?;
-    SecretString::from(key_content)
-        .expose_secret()
-        .trim()
-        .parse()
-        .map_err(|e| SecretError::Parse(format!("Invalid private key: {}", e)))
 }
 
 /// Ensure path has .age extension
@@ -280,22 +309,9 @@ pub fn ensure_age_extension(path: &Path) -> PathBuf {
     }
 }
 
-pub fn generate_unique_filename(output_dir: &Path) -> Result<PathBuf, SecretError> {
-    for _ in 0..10 {
-        let random_id = generate_base58(16).map_err(|e| SecretError::Parse(e.to_string()))?;
-        let path = output_dir.join(&random_id.expose_secret());
-        if !path.exists() {
-            return Ok(ensure_age_extension(&path));
-        }
-    }
-    Err(SecretError::InvalidPath(
-        "Could not generate unique filename".to_string(),
-    ))
-}
-
 fn get_key_paths(keys_dir: &Path) -> (PathBuf, PathBuf) {
-    let public_key_path = keys_dir.join("secrets.pub");
-    let private_key_path = keys_dir.join("secrets.key");
+    let public_key_path = keys_dir.join("recipient.pub");
+    let private_key_path = keys_dir.join("identity.key");
     (public_key_path, private_key_path)
 }
 

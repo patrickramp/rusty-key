@@ -1,39 +1,21 @@
 // src/filesystem.rs
 use crate::errors::SecretError;
 
-use parking_lot::Mutex;
-use std::collections::HashMap;
-use std::fs;
+use dashmap::DashMap;
+use once_cell::sync::Lazy;
+use std::fs::{self, OpenOptions};
 use std::io::{self, Read};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
-
-/// Global file locks to prevent concurrent access
-static FILE_LOCKS: once_cell::sync::Lazy<Arc<Mutex<HashMap<PathBuf, ()>>>> =
-    once_cell::sync::Lazy::new(|| Arc::new(Mutex::new(HashMap::new())));
+use std::str::FromStr;
+use std::thread;
+use std::time::{Duration, Instant};
 
 /// File system operations with security-focused design
 pub struct FileManager;
 
 impl FileManager {
-    pub fn new() -> Self {
-        Self
-    }
-
-    /// Create directory with secure permissions
-    pub fn create_secure_dir(&self, path: &Path, mode: u32) -> Result<(), SecretError> {
-        if path.exists() {
-            self.verify_dir_permissions(path, mode)?;
-            return Ok(());
-        }
-        // Create directory
-        fs::create_dir_all(path)?;
-        self.set_permissions(path, mode)?;
-        Ok(())
-    }
-
-    /// Write file atomically with exclusive lock
+    /// Write file atomically with lock
     pub fn write_atomic(
         &self,
         path: &Path,
@@ -51,36 +33,35 @@ impl FileManager {
         // Write to temporary file first
         let temp_path = path.with_extension("tmp");
         fs::write(&temp_path, content)?;
-        self.set_permissions(&temp_path, file_mode)?;
+        set_permissions(&temp_path, file_mode)?;
 
-        // Atomic rename
+        // Rename to final path
         fs::rename(&temp_path, path)?;
+
         Ok(())
     }
 
-    /// List encrypted files (.age extension)
-    pub fn list_encrypted_files(&self, dir: &Path) -> Result<Vec<PathBuf>, SecretError> {
-        let mut files = Vec::new();
-
-        for entry in fs::read_dir(dir)? {
-            let path = entry?.path();
-            if path.extension().and_then(|s| s.to_str()) == Some("age") {
-                files.push(path);
-            }
+    /// Create directory with secure permissions
+    pub fn create_secure_dir(&self, path: &Path, mode: u32) -> Result<(), SecretError> {
+        if path.exists() {
+            verify_path_permissions(path, mode)?;
+            return Ok(());
         }
-
-        Ok(files)
+        // Create directory
+        fs::create_dir_all(path)?;
+        set_permissions(path, mode)?;
+        Ok(())
     }
 
     /// Parse content from various input sources
     pub fn parse_content(&self, input: &str) -> Result<String, SecretError> {
         let content = match input {
-            "-" => self.read_stdin()?,
+            "-" => read_stdin()?,
             input if input.starts_with('@') => {
                 let path = &input[1..];
-                self.read_file_content(Path::new(path))?
+                read_file_content(Path::new(path))?
             }
-            input if Path::new(input).exists() => self.read_file_content(Path::new(input))?,
+            input if Path::new(input).exists() => read_file_content(Path::new(input))?,
             input => input.to_string(),
         };
 
@@ -90,74 +71,134 @@ impl FileManager {
     /// Parse age recipient from input
     pub fn parse_recipient(&self, input: &str) -> Result<age::x25519::Recipient, SecretError> {
         let content = self.parse_content(input)?;
-        content
-            .parse()
+        age::x25519::Recipient::from_str(&content)
             .map_err(|e| SecretError::Parse(format!("Invalid recipient: {}", e)))
     }
 
-    /// Securely remove file
-    pub fn _secure_remove(&self, path: &Path) -> Result<(), SecretError> {
-        if !path.exists() {
-            return Err(SecretError::InvalidPath(format!(
-                "File does not exist: {}",
-                path.display()
+    /// Parse Identity from file
+    pub fn parse_identity_file(&self, input: &Path) -> Result<age::x25519::Identity, SecretError> {
+        let key_content = read_file_content(input)?;
+        age::x25519::Identity::from_str(&key_content)
+            .map_err(|_| SecretError::Parse("Invalid private key".to_string()))
+    }
+
+    /// List files (.age extension) in directory
+    pub fn list_age_files(&self, dir: &Path) -> Result<Vec<PathBuf>, SecretError> {
+               // Verify source directory exists
+        if !dir.exists() {
+            return Err(SecretError::FileExists(format!(
+                "Source directory {} does not exist",
+                dir.display()
+            )));
+        }
+ 
+
+        let mut files = Vec::new();
+
+        for entry in fs::read_dir(dir)? {
+            let path = entry?.path();
+            if path.extension().and_then(|s| s.to_str()) == Some("age") {
+                files.push(path);
+            }
+        }
+
+        if files.is_empty() {
+            return Err(SecretError::FileExists(format!(
+                "No .age files found in {}",
+                dir.display()
             )));
         }
 
-        fs::remove_file(path)?;
-        Ok(())
+        Ok(files)
     }
 
-    // Private helper methods
-    fn read_stdin(&self) -> Result<String, SecretError> {
-        let mut buffer = String::new();
-        io::stdin().read_to_string(&mut buffer)?;
-        Ok(buffer.trim_end_matches('\n').to_string())
-    }
 
-    pub fn read_file_content(&self, path: &Path) -> Result<String, SecretError> {
-        if !path.exists() {
-            return Err(SecretError::InvalidPath(format!(
-                "File not found: {}",
+    /// Check if path exists (dir or file) and check for force
+    pub fn overwrite_check(& self, path: &Path, force: bool) -> Result<(), SecretError> {
+        if !force && path.exists() {
+            return Err(SecretError::FileExists(format!(
+                "Output file {} already exists. Use --force to overwrite",
                 path.display()
             )));
         }
-
-        fs::read_to_string(path).map_err(|e| {
-            SecretError::InvalidPath(format!("Failed to read {}: {}", path.display(), e))
-        })
-    }
-
-    fn set_permissions(&self, path: &Path, mode: u32) -> Result<(), SecretError> {
-        let permissions = fs::Permissions::from_mode(mode);
-        fs::set_permissions(path, permissions)?;
         Ok(())
     }
 
-    fn verify_dir_permissions(&self, path: &Path, mode: u32) -> Result<(), SecretError> {
-        let metadata = fs::metadata(path).map_err(|_| {
-            SecretError::InvalidPath(format!("Cannot read permissions for {}", path.display()))
+    /// Securely remove file with lock
+    pub fn secure_remove(path: &Path) -> Result<(), SecretError> {
+        let _lock = FileLockGuard::acquire(path)?;
+
+        match OpenOptions::new().write(true).open(path) {
+            Ok(file) => {
+                let _ = file.sync_all(); // Best-effort
+            }
+            Err(e) => {
+                // File may not be writable, warn but continue to try deletion
+                eprintln!(
+                    "[WARN] Failed to open {} for syncing before delete: {}",
+                    path.display(),
+                    e
+                );
+            }
+        }
+
+        fs::remove_file(path).map_err(|e| {
+            SecretError::InvalidPath(format!("Failed to remove {}: {}", path.display(), e))
         })?;
 
-        let current_mode = metadata.permissions().mode() & 0o777;
-
-        if current_mode & !mode != 0 {
-            eprintln!(
-                "[WARNING] Directory {} has permissive mode {:o} (expected {:o})",
-                path.display(),
-                current_mode,
-                mode
-            );
-        }
         Ok(())
     }
 }
 
-impl Default for FileManager {
-    fn default() -> Self {
-        Self::new()
-    }
+/// Private helper functions
+
+// Read content from stdin
+fn read_stdin() -> Result<String, SecretError> {
+    let mut buffer = String::new();
+    io::stdin().read_to_string(&mut buffer)?;
+    Ok(buffer.trim_end_matches('\n').to_string())
 }
+// Read content from file
+fn read_file_content(path: &Path) -> Result<String, SecretError> {
+    if !path.exists() {
+        return Err(SecretError::InvalidPath(format!(
+            "File not found: {}",
+            path.display()
+        )));
+    }
+
+    fs::read_to_string(path)
+        .map_err(|e| SecretError::InvalidPath(format!("Failed to read {}: {}", path.display(), e)))
+}
+
+// Set file permissions
+fn set_permissions(path: &Path, mode: u32) -> Result<(), SecretError> {
+    let permissions = fs::Permissions::from_mode(mode);
+    fs::set_permissions(path, permissions)?;
+    Ok(())
+}
+
+// Verify directory permissions
+fn verify_path_permissions(path: &Path, mode: u32) -> Result<(), SecretError> {
+    let metadata = fs::metadata(path).map_err(|_| {
+        SecretError::InvalidPath(format!("Cannot read permissions for {}", path.display()))
+    })?;
+
+    let current_mode = metadata.permissions().mode() & 0o777;
+
+    if current_mode & !mode != 0 {
+        eprintln!(
+            "[WARNING] Directory {} has permissive mode {:o} (expected {:o})",
+            path.display(),
+            current_mode,
+            mode
+        );
+    }
+    Ok(())
+}
+
+/// Global file locks to prevent concurrent access
+static FILE_LOCKS: Lazy<DashMap<PathBuf, ()>> = Lazy::new(DashMap::new);
 
 /// File lock guard for atomic operations
 struct FileLockGuard {
@@ -165,26 +206,45 @@ struct FileLockGuard {
 }
 
 impl FileLockGuard {
-    fn acquire(path: &Path) -> Result<Self, SecretError> {
-        let normalized_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    /// Immediately try to acquire a lock on the given path
+    pub fn acquire(path: &Path) -> Result<Self, SecretError> {
+        Self::try_acquire(path, Some(Duration::from_secs(3)))
+    }
 
-        let mut locks = FILE_LOCKS.lock();
-        if locks.contains_key(&normalized_path) {
-            return Err(SecretError::Lock(format!(
-                "File {} is already locked",
-                path.display()
-            )));
+    /// Try to acquire a lock with optional timeout
+    pub fn try_acquire(path: &Path, timeout: Option<Duration>) -> Result<Self, SecretError> {
+        let normalized_path = path.canonicalize().map_err(|e| {
+            SecretError::Lock(format!("Failed to canonicalize {}: {}", path.display(), e))
+        })?;
+
+        let start_time = Instant::now();
+        loop {
+            // Attempt to insert the lock
+            if FILE_LOCKS.insert(normalized_path.clone(), ()).is_none() {
+                return Ok(Self {
+                    path: normalized_path,
+                });
+            }
+
+            // If timeout is specified and exceeded, return error
+            if let Some(max_duration) = timeout {
+                if start_time.elapsed() >= max_duration {
+                    return Err(SecretError::Lock(format!(
+                        "Timeout: could not acquire lock on {} within {:?}",
+                        normalized_path.display(),
+                        max_duration
+                    )));
+                }
+            }
+
+            // Back off briefly before retrying (could also use exponential backoff)
+            thread::sleep(Duration::from_millis(300));
         }
-
-        locks.insert(normalized_path.clone(), ());
-        Ok(Self {
-            path: normalized_path,
-        })
     }
 }
 
 impl Drop for FileLockGuard {
     fn drop(&mut self) {
-        FILE_LOCKS.lock().remove(&self.path);
+        FILE_LOCKS.remove(&self.path);
     }
 }

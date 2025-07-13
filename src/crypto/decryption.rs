@@ -1,8 +1,15 @@
+// // src/crypto/decryption.rs
 use super::*;
+
+use age::Decryptor;
+use age::secrecy::{ExposeSecret, SecretString};
+use std::fs;
+use std::io::{self, Read, Write};
+use std::path::{Path, PathBuf};
 
 impl CryptoManager {
     /// Decrypt secret to specific file
-    pub fn decrypt_to_file(
+    pub fn open_secret_to_file (
         &self,
         key_path: &Path,
         secret: &Path,
@@ -10,23 +17,18 @@ impl CryptoManager {
         force: bool,
         fs: &FileManager,
     ) -> Result<(), SecretError> {
-        if !force && output.exists() {
-            return Err(SecretError::FileExists(format!(
-                "Output file {} already exists. Use --force to overwrite",
-                output.display()
-            )));
-        }
+        // Verify output file doesn't exist
+        fs.overwrite_check(output, force)?;
 
-        let identity = load_identity(key_path)?;
+        let identity = fs.parse_identity_file(key_path)?;
         let content = self.decrypt_file(&identity, secret)?;
 
         fs.write_atomic(output, content.expose_secret().as_bytes(), 0o640, 0o750)?;
         Ok(())
     }
 
-
     /// Decrypt all secrets in directory
-    pub fn decrypt_all_secrets(
+    pub fn open_all_secrets(
         &self,
         key_path: &Path,
         source: &Path,
@@ -34,21 +36,20 @@ impl CryptoManager {
         force: bool,
         fs: &FileManager,
     ) -> Result<(), SecretError> {
-        let identity = load_identity(key_path)?;
+        // List encrypted files
+        let encrypted_files = fs.list_age_files(source)?;
+
+        // Verify output directory exists and is secure
         fs.create_secure_dir(output, 0o710)?;
 
-        let encrypted_files = fs.list_encrypted_files(source)?;
-        if encrypted_files.is_empty() {
-            eprintln!("Warning: No .age files found in {}", source.display());
-            return Ok(());
-        }
+        // Load identity
+        let identity = fs.parse_identity_file(key_path)?;
 
+        // Batch decrypt
         let (success_count, errors) =
             self.process_batch_decrypt(&encrypted_files, output, &identity, force, fs)?;
-
         self.report_batch_results(success_count, errors, output)
     }
-
 
     /// Decrypt to .env file
     pub fn decrypt_to_env(
@@ -60,28 +61,44 @@ impl CryptoManager {
         fs: &FileManager,
     ) -> Result<(), SecretError> {
         // Verify output file doesn't exist
-        if !force && output.exists() {
-            return Err(SecretError::FileExists(format!(
-                "Output file {} already exists. Use --force to overwrite",
-                output.display()
-            )));
-        }
+        fs.overwrite_check(output, force)?;
 
-        fs.create_secure_dir(output.parent().ok_or_else(|| {
-            SecretError::InvalidPath(format!("Invalid output directory: {}", output.display()))
-        })?, 0o710)?;
+        // Ensure the parent directory exists and is secure
+        fs.create_secure_dir(
+            output.parent().ok_or_else(|| {
+                SecretError::InvalidPath(format!("Invalid output directory: {}", output.display()))
+            })?,
+            0o710,
+        )?;
 
-        fs.write_atomic(path::Path::new(output), "".as_bytes(), 0o640, 0o710)?; 
+        
+        let identity = fs.parse_identity_file(key_path)?;
+        
+        let mut env_contents = String::new();
 
-        let identity = load_identity(key_path)?;
-        for secret in fs.list_encrypted_files(secret_dir)? {
-            let var: &str = self.decrypt_file(identity, &secret_dir)?.expose_secret();
-            // Write to output file
-            fs::append_file(output, format!("{}={}\n", secret.file_stem().unwrap().to_str().unwrap(), var).as_bytes())?;
-        }
+        let secure_contents = {
+            for secret in fs.list_age_files(secret_dir)? {
+                let secret_name = secret.file_stem().expect("Invalid filename").to_str().unwrap();
+                let secret_content = self.decrypt_file(&identity, &secret)?;
+                env_contents.push_str(&format!(
+                    "{}={}\n",
+                    secret_name.to_uppercase(),
+                    secret_content.expose_secret()
+                ));
+            }
+            SecretString::from(env_contents)
+        };
+
+        // Write all entries to the output file
+        fs.write_atomic(
+            output,
+            secure_contents.expose_secret().as_bytes(),
+            0o640,
+            0o710,
+        )?;
+
         Ok(())
     }
-
 
     fn process_batch_decrypt(
         &self,
@@ -90,8 +107,8 @@ impl CryptoManager {
         identity: &age::x25519::Identity,
         force: bool,
         fs: &FileManager,
-    ) -> Result<(usize, Vec<String>), SecretError> {
-        let mut success_count = 0;
+    ) -> Result<(u16, Vec<String>), SecretError> {
+        let mut success_count: u16 = 0;
         let mut errors = Vec::new();
 
         for file in files {
@@ -137,7 +154,7 @@ impl CryptoManager {
 
     fn report_batch_results(
         &self,
-        success_count: usize,
+        success_count: u16,
         errors: Vec<String>,
         output: &Path,
     ) -> Result<(), SecretError> {
@@ -169,18 +186,25 @@ impl CryptoManager {
         let mut reader = decryptor.decrypt(std::iter::once(identity as &dyn age::Identity))?;
         reader.read_to_end(&mut decrypted)?;
 
-        Ok(SecretString::from(
-            String::from_utf8_lossy(&decrypted).to_string(),
-        ))
+        let content = String::from_utf8(decrypted).map_err(|e| {
+            SecretError::Parse(format!("Invalid UTF-8 in decrypted content: {}", e))
+        })?;
+
+        Ok(SecretString::from(content))
     }
 
+    /// Decrypt secret to stdout
+    pub fn show_secret(
+        &self,
+        key_path: &Path,
+        source: &Path,
+        fs: &FileManager,
+    ) -> Result<(), SecretError> {
+        let identity = fs.parse_identity_file(key_path)?;
+        let content = self.decrypt_file(&identity, source)?;
 
-
-
-
-
-
-
-
+        io::stdout().write_all(content.expose_secret().as_bytes())?;
+        io::stdout().flush()?;
+        Ok(())
+    }
 }
-
