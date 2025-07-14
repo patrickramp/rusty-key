@@ -23,6 +23,7 @@ impl FileManager {
         file_mode: u32,
         dir_mode: u32,
     ) -> Result<(), SecretError> {
+        // Acquire lock
         let _lock = FileLockGuard::acquire(path)?;
 
         // Ensure parent directory exists
@@ -41,60 +42,18 @@ impl FileManager {
         Ok(())
     }
 
-    /// Create directory with secure permissions
-    pub fn create_secure_dir(&self, path: &Path, mode: u32) -> Result<(), SecretError> {
-        if path.exists() {
-            verify_path_permissions(path, mode)?;
-            return Ok(());
-        }
-        // Create directory
-        fs::create_dir_all(path)?;
-        set_permissions(path, mode)?;
-        Ok(())
-    }
-
-    /// Parse content from various input sources
-    pub fn parse_content(&self, input: &str) -> Result<String, SecretError> {
-        let content = match input {
-            "-" => read_stdin()?,
-            input if input.starts_with('@') => {
-                let path = &input[1..];
-                read_file_content(Path::new(path))?
-            }
-            input if Path::new(input).exists() => read_file_content(Path::new(input))?,
-            input => input.to_string(),
-        };
-
-        Ok(content.trim().to_string())
-    }
-
-    /// Parse age recipient from input
-    pub fn parse_recipient(&self, input: &str) -> Result<age::x25519::Recipient, SecretError> {
-        let content = self.parse_content(input)?;
-        age::x25519::Recipient::from_str(&content)
-            .map_err(|e| SecretError::Parse(format!("Invalid recipient: {}", e)))
-    }
-
-    /// Parse Identity from file
-    pub fn parse_identity_file(&self, input: &Path) -> Result<age::x25519::Identity, SecretError> {
-        let key_content = read_file_content(input)?;
-        age::x25519::Identity::from_str(&key_content)
-            .map_err(|_| SecretError::Parse("Invalid private key".to_string()))
-    }
-
     /// List files (.age extension) in directory
     pub fn list_age_files(&self, dir: &Path) -> Result<Vec<PathBuf>, SecretError> {
-               // Verify source directory exists
+        // Verify source directory exists
         if !dir.exists() {
             return Err(SecretError::FileExists(format!(
                 "Source directory {} does not exist",
                 dir.display()
             )));
         }
- 
 
+        // Collect files with .age extension to vector
         let mut files = Vec::new();
-
         for entry in fs::read_dir(dir)? {
             let path = entry?.path();
             if path.extension().and_then(|s| s.to_str()) == Some("age") {
@@ -112,9 +71,49 @@ impl FileManager {
         Ok(files)
     }
 
+    /// Parse age recipient from input
+    pub fn parse_recipient(&self, input: &str) -> Result<age::x25519::Recipient, SecretError> {
+        let content = self.parse_content(input)?;
+        age::x25519::Recipient::from_str(&content)
+            .map_err(|e| SecretError::Parse(format!("Invalid recipient: {}", e)))
+    }
+
+    /// Parse Identity from file
+    pub fn parse_identity_file(&self, input: &Path) -> Result<age::x25519::Identity, SecretError> {
+        let key_content = read_file_content(input)?;
+        age::x25519::Identity::from_str(&key_content)
+            .map_err(|_| SecretError::Parse("Invalid private key".to_string()))
+    }
+
+    /// Parse content from various input sources
+    pub fn parse_content(&self, input: &str) -> Result<String, SecretError> {
+        let content = match input {
+            "-" => read_stdin()?,
+            input if input.starts_with('@') => {
+                let path = &input[1..];
+                read_file_content(Path::new(path))?
+            }
+            input if Path::new(input).exists() => read_file_content(Path::new(input))?,
+            input => input.to_string(),
+        };
+
+        Ok(content.trim().to_string())
+    }
+
+    /// Create directory with secure permissions
+    pub fn create_secure_dir(&self, path: &Path, mode: u32) -> Result<(), SecretError> {
+        if path.exists() {
+            verify_path_permissions(path, mode)?;
+            return Ok(());
+        }
+        // Create directory
+        fs::create_dir_all(path)?;
+        set_permissions(path, mode)?;
+        Ok(())
+    }
 
     /// Check if path exists (dir or file) and check for force
-    pub fn overwrite_check(& self, path: &Path, force: bool) -> Result<(), SecretError> {
+    pub fn overwrite_check(&self, path: &Path, force: bool) -> Result<(), SecretError> {
         if !force && path.exists() {
             return Err(SecretError::FileExists(format!(
                 "Output file {} already exists. Use --force to overwrite",
@@ -125,23 +124,26 @@ impl FileManager {
     }
 
     /// Securely remove file with lock
-    pub fn secure_remove(path: &Path) -> Result<(), SecretError> {
+    pub fn _secure_remove(&self, path: &Path) -> Result<(), SecretError> {
+        // Acquire lock
         let _lock = FileLockGuard::acquire(path)?;
 
+        // Check if file is writable
         match OpenOptions::new().write(true).open(path) {
             Ok(file) => {
-                let _ = file.sync_all(); // Best-effort
+                // Best effort file sync to disk
+                let _ = file.sync_all();
             }
             Err(e) => {
-                // File may not be writable, warn but continue to try deletion
-                eprintln!(
-                    "[WARN] Failed to open {} for syncing before delete: {}",
+                return Err(SecretError::InvalidPath(format!(
+                    "Failed to open file {} for deletion: {}",
                     path.display(),
                     e
-                );
+                )));
             }
         }
 
+        // Remove file 
         fs::remove_file(path).map_err(|e| {
             SecretError::InvalidPath(format!("Failed to remove {}: {}", path.display(), e))
         })?;
@@ -158,6 +160,7 @@ fn read_stdin() -> Result<String, SecretError> {
     io::stdin().read_to_string(&mut buffer)?;
     Ok(buffer.trim_end_matches('\n').to_string())
 }
+
 // Read content from file
 fn read_file_content(path: &Path) -> Result<String, SecretError> {
     if !path.exists() {
@@ -213,20 +216,21 @@ impl FileLockGuard {
 
     /// Try to acquire a lock with optional timeout
     pub fn try_acquire(path: &Path, timeout: Option<Duration>) -> Result<Self, SecretError> {
-        let normalized_path = path.canonicalize().map_err(|e| {
-            SecretError::Lock(format!("Failed to canonicalize {}: {}", path.display(), e))
-        })?;
+        // Handle non-existent paths gracefully by creating parent directories
+        let normalized_path = Self::normalize_path(path)?;
 
         let start_time = Instant::now();
+        let mut backoff = Duration::from_millis(50); // Start with shorter backoff
+        
         loop {
-            // Attempt to insert the lock
+            // Attempt to insert the lock atomically
             if FILE_LOCKS.insert(normalized_path.clone(), ()).is_none() {
                 return Ok(Self {
                     path: normalized_path,
                 });
             }
 
-            // If timeout is specified and exceeded, return error
+            // Check timeout before sleeping
             if let Some(max_duration) = timeout {
                 if start_time.elapsed() >= max_duration {
                     return Err(SecretError::Lock(format!(
@@ -237,14 +241,53 @@ impl FileLockGuard {
                 }
             }
 
-            // Back off briefly before retrying (could also use exponential backoff)
-            thread::sleep(Duration::from_millis(300));
+            // Exponential backoff with jitter to reduce thundering herd
+            thread::sleep(backoff);
+            backoff = std::cmp::min(backoff * 2, Duration::from_millis(1000));
         }
+    }
+
+    /// Normalize path handling both existing and non-existing paths
+    fn normalize_path(path: &Path) -> Result<PathBuf, SecretError> {
+        // Try canonicalize first for existing paths
+        if let Ok(canonical) = path.canonicalize() {
+            return Ok(canonical);
+        }
+
+        // For non-existent paths, manually resolve to absolute path
+        let absolute = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            std::env::current_dir()
+                .map_err(|e| SecretError::Lock(format!("Failed to get current directory: {}", e)))?
+                .join(path)
+        };
+
+        // Clean up the path (remove . and .. components)
+        let mut components = Vec::new();
+        for component in absolute.components() {
+            match component {
+                std::path::Component::CurDir => continue,
+                std::path::Component::ParentDir => {
+                    if !components.is_empty() {
+                        components.pop();
+                    }
+                }
+                _ => components.push(component),
+            }
+        }
+
+        Ok(components.iter().collect())
     }
 }
 
 impl Drop for FileLockGuard {
     fn drop(&mut self) {
         FILE_LOCKS.remove(&self.path);
+        // Consider logging failed removals in debug builds
+        #[cfg(debug_assertions)]
+        if FILE_LOCKS.contains_key(&self.path) {
+            eprintln!("Warning: Failed to remove lock for {}", self.path.display());
+        }
     }
 }

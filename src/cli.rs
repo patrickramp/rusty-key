@@ -24,7 +24,7 @@ pub enum Commands {
         keys_dir: PathBuf,
 
         /// Directory for encrypted secrets storage
-        #[arg(short, long, default_value = "/etc/rusty-key/secrets")]
+        #[arg(short, long, default_value = "/var/lib/rusty-key/secrets")]
         secrets_dir: PathBuf,
 
         /// Force overwrite existing keys and permissions
@@ -34,7 +34,7 @@ pub enum Commands {
 
     // === KEY MANAGEMENT ===
     /// Generate new identity (private key)
-    GenIdentity {
+    GenId {
         /// Path for new private key file
         #[arg(short, long, default_value = "/etc/rusty-key/keys/identity.key")]
         key_path: PathBuf,
@@ -44,8 +44,8 @@ pub enum Commands {
         force: bool,
     },
 
-    /// Generate recipient (public key) from existing identity
-    GenRecipient {
+    /// Generate new recipient (public key) from existing identity
+    GenRecipt {
         /// Path to private key file
         #[arg(short, long, default_value = "/etc/rusty-key/keys/identity.key")]
         key_path: PathBuf,
@@ -59,11 +59,11 @@ pub enum Commands {
         force: bool,
     },
 
-    /// Generate new encryption keys and re-encrypt all secrets
+    /// Generate new encryption keys and re-encrypt all secrets in specified directory
     RotateKeys {
-        /// Path to old private key file
+        /// Path to old identity (private key) file
         #[arg(short, long, default_value = "/etc/rusty-key/keys/identity.key")]
-        old_key: PathBuf,
+        key_path: PathBuf,
 
         /// Directory for new key creation
         #[arg(short, long, default_value = "/etc/rusty-key/new_keys")]
@@ -77,7 +77,7 @@ pub enum Commands {
         #[arg(short, long)]
         verify: bool,
 
-        /// Force overwrite existing keys and directories
+        /// Force overwrite of new keys
         #[arg(long)]
         force: bool,
     },
@@ -184,6 +184,10 @@ pub enum Commands {
         /// Encrypted source file
         #[arg(short, long)]
         source: PathBuf,
+
+        /// Base encoding: 16(Hex), 32(RFC4648), 36(Alphanumeric), 58(BTC), 64(URL-Safe), 85(Z85), 94(ASCII)
+        #[arg(short, long, default_value = "58")]
+        base: u64,
     },
 
     // === BATCH OPERATIONS ===
@@ -227,12 +231,8 @@ pub enum Commands {
         #[arg(short, long, default_value = "/etc/rusty-key/secrets")]
         secrets_dir: PathBuf,
 
-        /// Verify new key roundtrip
+        /// Base encoding: 16(Hex), 32(RFC4648), 36(Alphanumeric), 58(BTC), 64(URL-Safe), 85(Z85), 94(ASCII)
         #[arg(short, long)]
-        verify: bool,
-
-        /// Force overwrite existing files
-        #[arg(long)]
-        force: bool,
+        base: u64,
     },
 }

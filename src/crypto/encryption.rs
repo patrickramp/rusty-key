@@ -14,13 +14,14 @@ impl CryptoManager {
         input: &str,
         output: &Path,
         force: bool,
-        fs: &FileManager,
     ) -> Result<(), SecretError> {
-        let output = ensure_age_extension(output);
-        let recipient = fs.parse_recipient(recipient)?;
-        let content = SecretString::from(fs.parse_content(input)?);
+        FileManager.overwrite_check(output, force)?;
 
-        self.encrypt_to_file(&output, &recipient, &content, force, fs)?;
+        let output = ensure_age_extension(output);
+        let recipient = FileManager.parse_recipient(recipient)?;
+        let content = SecretString::from(FileManager.parse_content(input)?);
+
+        self.encrypt_to_file(&output, &recipient, &content)?;
 
         println!(
             "Encrypted {} bytes to {}",
@@ -42,48 +43,84 @@ impl CryptoManager {
         cache_dir: &Path,
         auto_decrypt: bool,
         force: bool,
-        fs: &FileManager,
     ) -> Result<(), SecretError> {
-        let output_file = ensure_age_extension(&output_dir.join(name));
-        let input = new_secret_string(length, base)?; 
+        let file_name = sanitize_filename(name);
+        let output_file = ensure_age_extension(&output_dir.join(&file_name));
+        let input = new_secret_string(length, base)?;
 
-        self.new_secret(recipient, input.expose_secret(), &output_file, force, fs)?;
+        self.new_secret(recipient, input.expose_secret(), &output_file, force)?;
 
         if auto_decrypt {
             let cache_file = cache_dir
                 .join(output_file.file_name().unwrap())
                 .with_extension("");
-            self.open_secret_to_file(key_path, &output_file, &cache_file, true, fs)?;
-            println!("Auto-decrypted to {}", cache_file.display());
+            self.decrypt_path_to_dir(&key_path, &output_file, &cache_dir, force)?;
+            println!("Secret decrypted to {}", cache_file.display());
         }
 
         Ok(())
     }
 
-
     // Private implementation methods
+    /// Encrypt content to file
+    ///
+    /// # Arguments
+    /// - `output`: Output path for encrypted content
+    /// - `recipient`: Recipient key for encryption
+    /// - `content`: Content to encrypt
+    /// - `fs`: File manager for writing to disk
+    ///
+    /// # Errors
+    /// Fails if unable to encrypt content or write to disk
     pub fn encrypt_to_file(
         &self,
         output: &Path,
         recipient: &age::x25519::Recipient,
         content: &SecretString,
-        force: bool,
-        fs: &FileManager,
     ) -> Result<(), SecretError> {
-        fs.overwrite_check(output, force)?;
-
+        // Create encryptor
         let encryptor =
             Encryptor::with_recipients(std::iter::once(recipient as &dyn age::Recipient))
-                .map_err(|e| SecretError::Parse(format!("Failed to create encryptor: {}", e)))?;
+                .map_err(|e| SecretError::Encrypt(e))?;
 
+        // Encrypt content
         let mut encrypted = Vec::new();
         let mut writer = encryptor.wrap_output(&mut encrypted)?;
         writer.write_all(content.expose_secret().as_bytes())?;
         writer.finish()?;
 
-        fs.write_atomic(output, &encrypted, 0o640, 0o750)?;
+        // Write encrypted content to disk
+        FileManager.write_atomic(output, &encrypted, 0o640, 0o750)?;
         Ok(())
     }
+}
+
+// Private implementation methods
+/// Encrypt content to file
+///
+/// # Arguments
+/// - `output`: Output path for encrypted content
+/// - `recipient`: Recipient key for encryption
+/// - `content`: Content to encrypt
+/// - `fs`: File manager for writing to disk
+///
+/// # Errors
+/// Fails if unable to encrypt content or write to disk
+fn _encrypt_string(
+    recipient: &age::x25519::Recipient,
+    content: &SecretString,
+) -> Result<Vec<u8>, SecretError> {
+    // Create encryptor
+    let encryptor = Encryptor::with_recipients(std::iter::once(recipient as &dyn age::Recipient))
+        .map_err(|e| SecretError::Encrypt(e))?;
+
+    // Encrypt content
+    let mut encrypted = Vec::new();
+    let mut writer = encryptor.wrap_output(&mut encrypted)?;
+    writer.write_all(content.expose_secret().as_bytes())?;
+    writer.finish()?;
+
+    Ok(encrypted)
 }
 
 // Sanitize filename

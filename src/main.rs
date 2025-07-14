@@ -6,7 +6,6 @@ mod random;
 
 use cli::{Cli, Commands};
 use crypto::{CryptoManager};
-use filesystem::FileManager;
 use errors::SecretError;
 
 use clap::Parser;
@@ -16,44 +15,43 @@ use clap::Parser;
 fn main() -> Result<(), SecretError> {
     let cli = Cli::parse();
     let crypto = CryptoManager;
-    let fs = FileManager;
 
     match cli.commands {
         Commands::Init {
             keys_dir,
             secrets_dir,
             force,
-        } => crypto.init_store(&keys_dir, &secrets_dir, force, &fs),
+        } => crypto.init_store(&keys_dir, &secrets_dir, force),
 
-        Commands::GenIdentity { key_path, force } => crypto.new_identity(&key_path, force, &fs),
+        Commands::GenId { key_path, force } => crypto.new_identity(&key_path, force),
 
-        Commands::GenRecipient {
+        Commands::GenRecipt {
             key_path,
             recipient_path,
             force,
-        } => crypto.new_recipient(&key_path, &recipient_path, force, &fs),
+        } => crypto.new_recipient(&key_path, &recipient_path, force),
 
         Commands::RotateKeys {
-            old_key,
+            key_path,
             new_keys_dir,
             secrets_dir,
             verify,
             force,
-        } => crypto.rotate_encryption_keys(&old_key, &new_keys_dir, &secrets_dir, verify, force, &fs),
+        } => crypto.rotate_encryption_keys(&key_path, &new_keys_dir, &secrets_dir, verify, force),
 
         Commands::Encrypt {
             recipient,
             input,
             output,
             force,
-        } => crypto.new_secret(&recipient, &input, &output, force, &fs),
+        } => crypto.new_secret(&recipient, &input, &output, force),
 
         Commands::Decrypt {
             key_path,
             input,
             output,
             force,
-        } => crypto.open_secret_to_file(&key_path, &input, &output, force, &fs),
+        } => crypto.decrypt_path_to_path(&key_path, &input, &output, force),
 
         Commands::Generate {
             recipient,
@@ -75,34 +73,31 @@ fn main() -> Result<(), SecretError> {
             &cache,
             auto_decrypt,
             force,
-            &fs,
         ),
 
-        Commands::Show { key_path, source } => crypto.show_secret(&key_path, &source, &fs),
+        Commands::Show { key_path, source } => crypto.show_secret(&key_path, &source),
 
         Commands::RotateSecret {
             key_path,
-            secret_path,
             recipient,
-            base: u64,
-            verify,
-        } => crypto.rotate_secret(&key_path, secret_path, recipient, base, verify, &fs),
+            source,
+            base,
+        } => crypto.rotate_secret(&key_path, &recipient, &source, base),
 
-        Commands::List { secrets_dir } => crypto.list_secrets(&secrets_dir, &fs),
+        Commands::List { secrets_dir } => crypto.list_secrets(&secrets_dir),
 
         Commands::DecryptAll {
             key_path,
             source,
             output,
             force,
-        } => crypto.open_all_secrets(&key_path, &source, &output, force, &fs),
+        } => crypto.decrypt_all_secrets(&key_path, &source, &output, force),
 
         Commands::RotateAll {
             key_path,
             recipient,
             secrets_dir,
-            verify,
-            force,
-        } => crypto.rotate_secrets(&key_path, &recipient, &secrets_dir, verify, force, &fs),
+            base,
+        } => crypto.rotate_all_secrets(&key_path, &recipient, &secrets_dir, base),
     }
 }
