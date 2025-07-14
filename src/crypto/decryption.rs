@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 impl CryptoManager {
     /// Decrypt to .env file
-    pub fn _decrypt_to_env(
+    pub fn decrypt_to_env(
         &self,
         key_path: &Path,
         source_dir: &Path,
